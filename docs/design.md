@@ -1,7 +1,15 @@
 # Design: `donut!` — donut wrapping for Rust components (WASI p2)
 
-Status: draft / proposal. Revised after comparing with `docs/p2-donut-wrapping-astra.md`
-and reviewing [proxy-component](https://github.com/chenyan2002/proxy-component); nothing here is prototyped yet.
+Status: working end to end for the §3.1 example (embed mode). Revised after comparing
+with `docs/p2-donut-wrapping-astra.md` and reviewing
+[proxy-component](https://github.com/chenyan2002/proxy-component). Implemented:
+* the wit-bindgen option (§4 step 3);
+* `DonutPlan` and the `donut!` macro (§4, this repo);
+* wit-component's donut mode and `wasm-tools component new --donut-guest` (§5).
+
+`examples/http` builds with `donut!` and runs on Wasmtime 49. `spike/` is the
+hand-assembled golden output for §5.1. `docs/plan.md` has the status, the branches
+and the follow-ups.
 Scope: component model p2 only (sync functions, resources; no `async`, `stream`, `future`)
 Reference: [Explainer § Virtualization and "donut wrapping"](https://github.com/WebAssembly/component-model/blob/new-explainer/design/mvp/Explainer.md#virtualization-and-donut-wrapping)
 
@@ -59,9 +67,25 @@ worlds plus a mapping**, not one WIT file:
 The cycle is donut core instance → guest → donut core instance. Breaking it requires a
 core `funcref` table that is patched *after* the guest is instantiated, within the scope
 that holds the donut's core instance. Composing two finished components (wac, `wasm-compose`)
-can't do this: component-level funcs are immutable, funcrefs can't cross component
-boundaries, and the resource-type identity problem from 2.1 remains. So **the component
-encoder must change**. A post-processing tool around a finished component can't do it.
+can't do this:
+
+* **Before encoding, the donut isn't a component yet.** It is a core module with
+  `[guest-export]…` imports plus metadata. Turning it into a component (lifts, lowers,
+  shims, fixups) *is* the step that must change, and that step is `ComponentEncoder`'s.
+  Composition tools take finished components as input.
+* **No finished donut component could be valid anyway.** To call
+  `guest.handler.receive(own<request>)`, the donut would have to *import* it, but
+  `request` is a resource the donut defines, and imports can't mention a component's
+  own types (2.1).
+* **The cycle needs core-level patching.** Component-level funcs are immutable and
+  funcrefs can't cross component boundaries, so composition can't express a table
+  patched after the guest is instantiated.
+
+So **the component encoder must change**. A post-processing tool around a finished
+component can't do it. Composition still has a role *after* encoding: plugging a guest
+into a hole-mode donut is ordinary composition and belongs in wac (§7). §9.2 looks at
+the alternative of having wac generate the linkage itself around an ordinary donut
+component, and why it isn't pursued.
 
 ### 2.3 wit-component already contains the LinkageTable
 
@@ -85,9 +109,13 @@ What's missing:
 
 In the current Canonical ABI reference (`definitions.py`), a **sync** lift does no
 backpressure or exclusivity check, so `serve → guest.receive → donut.send` is legal. Runtimes
-lag behind. Older Wasmtime p2 kept a per-instance `may_enter` flag and would trap with
-"cannot enter component instance". **This has to be checked on the target runtime first**
-(Phase 0). If it fails, §9 has a fallback.
+lag behind. **Checked in the phase-0 spike:**
+* Wasmtime 49.0.1 runs the nested, re-entrant layout, including re-entrant dtors.
+* Wasmtime 48.0.2 traps with "cannot enter component instance" already on the donut's
+  *first* call into its nested guest, before any re-entrance. It rejected any call
+  from a parent instance into its child.
+
+So **Wasmtime ≥ 49 is required**, and the §9.1 fallback isn't needed.
 
 **p3 outlook (out of scope here, but it constrains future extensions).** p3 still has no
 re-entrance trap. Instead, entry into an `async func` export is gated
@@ -141,20 +169,26 @@ world socket-server {         // the donut's own outer world ($SocketServer)
 ### 3.2 Macro invocation
 
 ```rust
-wit_bindgen::donut!({
+donut::donut!({
     path: "wit",
     world: "example:http/socket-server",   // donut's outer world
     guest: "example:http/http-guest",      // the hole's shape
     // Guest imports the donut implements. Every other guest import is
     // passed through from the host unchanged (added to the donut's imports).
     virtualize: ["example:http/types", "example:http/outgoing"],
-    // Optional: generate forwarding wrappers (see §6) when a virtualized
-    // interface has the same shape as a host interface.
+    // Planned: forwarding wrappers (see §6) when a virtualized interface has the
+    // same shape as a host interface.
     // forward: { "example:http/types": "example:http/types" },
-    // All ordinary `generate!` options (ownership, with, additional_derives…)
-    // are accepted and apply to World A.
+    // Planned: the ordinary `generate!` options (ownership, with,
+    // additional_derives…), applied to World A.
 });
 ```
+
+Implemented today: `path` (a string or a list of strings, relative to the crate's
+manifest directory; default `"wit"`), `world`, `guest`, `virtualize`. The macro must be
+invoked at the crate root, because World B's remap paths are `crate::…` (§4 step 3).
+The macro lives in the `donut` crate for now; `wit_bindgen::donut!` is a later
+decision (§10.1).
 
 ### 3.3 Generated module layout
 
@@ -221,10 +255,18 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
        `outgoing.send(virtual-request)` once `types.request` is virtualized. This is a
        configuration error naming the interface to add to `V`. Never widen `V` silently.
        Resource-free dependencies don't trigger it.
-2. **Build World A** (cloned into a fresh `World` in the same `Resolve`):
+2. **Build World A**:
    `W.imports ∪ passthrough(G) ∪ {import X | X needed by a virtual interface's use-closure}`,
    `W.exports ∪ {export v | v ∈ virtual}`. A world may both import and export the same
    interface (needed when the donut wraps the real `example:http/types`).
+   As implemented, World A and World B are written as WIT in a synthetic package and
+   pushed into the `Resolve`, so wit-parser elaborates their dependencies:
+   ```wit
+   package donut:generated;
+   world donut-a { include example:http/socket-server; import wasi:clocks/monotonic-clock@0.2.0;
+                   export example:http/types; export example:http/outgoing; }
+   world donut-b { import example:http/handler; }
+   ```
    Run `wit_bindgen_rust` normally. This emits the usual
    `component-type:wit-bindgen:…` section for World A.
 3. **Build World B:** `import e` for every `e ∈ G.exports`; world-level guest exports go into
@@ -259,11 +301,17 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
      paths are still fine for types that contain no resources and match in ownership mode.
    * World B would also emit import-side functions for the dependency interfaces,
      including inherent `impl Request { fn new(..) }` methods. Those collide with the
-     export-side `Request::new<T>` and `get`. Suppress them: initially via `skip`
-     (which matches `func.name` globally, e.g. `[constructor]request`,
-     `[method]request.path`; `interface.rs:163,819`), and later via an "emission
-     purpose" option (definitions-only for dependency interfaces, calls for guest-export
-     interfaces).
+     export-side `Request::new<T>` and `get`. Suppress them by removing those functions
+     from the dependency-only interfaces in DonutPlan's private copy of the `Resolve`
+     before generating World B. No wit-bindgen option is needed. The fallback is
+     `skip`, which matches `func.name` globally (e.g. `[constructor]request`;
+     `interface.rs:163,819`).
+   * **Host (passthrough) dependencies are the exception.** An interface that World B
+     only needs as a dependency, and that World A *imports* from the host (e.g. a
+     `wasi:io/streams` used by a guest export), is the same import-side binding in
+     both worlds. It is remapped with interface-level `with` to World A's import
+     module. Neither objection above applies: it has no functions World B needs and
+     no export-side types.
    * **Resources the guest defines** (declared in a guest-export interface) are not
      remapped. They are generated as ordinary opaque imported resources in `guest::…`,
      and their `[resource-drop]` imports go through the `[guest-export]` module too, so
@@ -271,27 +319,47 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
    * The restriction in §8 still holds: an incoming `RequestBorrow` has no handle in the
      donut's table, so it can't be relayed to a guest export.
 
-   **Symbol routing and metadata:**
-   * `import_module_prefix: "[guest-export]"`, applied where `wasm_import_module` is
-     computed (`crates/rust/src/lib.rs:1334` and the `$root` equivalent). Core imports
-     become e.g. `"[guest-export]example:http/handler" "receive"`.
-   * Don't emit a `component-type` section for this world. `type_section_suffix` only
-     renames the section and `disable_custom_section_link_helpers` only changes retention,
-     so neither does this today.
-   * Neither is an option yet. §10 explains how to get both without forking.
+   **Symbol routing and metadata:** one library-only wit-bindgen-rust option, added for
+   this design: `Opts::import_module_prefix: Some("[guest-export]")`. It:
+   * **Prefixes every import module of the world:** interface and `$root` functions,
+     `[resource-drop]` of imported resources (including guest-defined ones), and
+     stream/future payload intrinsics. Core imports become e.g.
+     `"[guest-export]example:http/handler" "receive"`. `[export]…` modules are unchanged.
+   * **Suppresses the world's `component-type` section and its link helpers,** because
+     prefixed imports are not component imports. If the section were kept,
+     wit-component would merge it and expect the guest's exports as host imports (the
+     2.1 problem). `type_section_suffix` only renames the section, and
+     `disable_custom_section_link_helpers` only drops the keep-alive helpers, so neither
+     could do this.
+
+   The prefix is what lets the encoder tell a call to the guest's export apart from a
+   host import of the same interface. An example is a donut that imports the host's
+   `handler` and also calls the guest's `handler`. Without the prefix, both would be the
+   same `"example:http/handler" "receive"` symbol. This is the same convention as
+   `[export]` for export-side intrinsics.
 4. **Emit the donut manifest** as custom section `wit-bindgen-donut:v0`. The name must
    **not** start with `component-type`: wit-component merges every such section into the
-   world (`metadata.rs:237`). Contents (binary WIT package plus a small header):
-   * the guest world `G`, encoded so the encoder can produce the guest's component type;
-   * the virtual set with the World-A export key ↔ guest import name mapping (including
-     `guest-root` flattening);
-   * the passthrough set (World-A import key ↔ guest import name);
-   * the `[guest-export]` prefix and the World-B function list (for ABI options).
+   world (`metadata.rs:237`). Contents, as implemented by
+   `wit_component::donut::encode_manifest`
+   (`u8 version | vec<u8> G | vec<string> virtualized`):
+   * a version byte (`0`);
+   * the guest world `G`, in wit-component's metadata encoding (`metadata::encode`).
+     The encoder uses it to produce the guest's component type, rebuild World B, and
+     check an embedded guest against it. Hole mode needs it because there is no guest
+     binary;
+   * the list of virtualized guest imports. It must be explicit: when the donut wraps
+     the real interface, World A both imports and exports it.
+
+   Everything else is derived by convention, so it isn't serialized:
+   * passthrough = the remaining guest imports, bound to World-A imports by
+     `Resolve::canonicalized_id_of` (see §5.1);
+   * the `[guest-export]` prefix;
+   * the `guest-root` naming;
+   * World B (its function list and ABI options), built from `G.exports`.
 
 Steps 1–4 form a `DonutPlan` library that a proc macro (`donut!`) and a CLI both drive.
-Where it lives, and how it gets the missing generator knobs, is covered in §10. Keep the
-mapping between World A, World B, and `G` as explicit port mappings computed **before**
-generation. `generate_nominal_type_ids` (`crates/core/src/lib.rs:28`) rewrites arena
+Where each piece lives is covered in §10. Keep the mapping between World A, World B,
+and `G` as explicit port mappings computed **before** generation. `generate_nominal_type_ids` (`crates/core/src/lib.rs:28`) rewrites arena
 IDs during each generator run, so IDs can't be matched across views afterwards.
 
 ## 5. The linkage table (encoder side)
@@ -305,20 +373,33 @@ export.
 
 ### 5.1 New "donut mode" in `wit-component::ComponentEncoder`
 
-Turned on automatically when a `wit-bindgen-donut:*` section is present, or explicitly
-via `ComponentEncoder::donut(guest: GuestSource)`, where
-`GuestSource = Embed(Vec<u8>) | Import`.
+Turned on by a `wit-bindgen-donut:v0` section in the main module
+(`wit_component::donut`). The guest to embed is given with
+`ComponentEncoder::donut_guest(&[u8])`, or `wasm-tools component new --donut-guest`.
+A manifest without a guest, or a guest without a manifest, is an error. Hole mode
+(§7) would add a variant that emits a component-typed import instead.
 
 Changes to validation (`validation.rs`):
 
-* New import classification `Import::GuestExportFunc { interface, func }` for core imports
-  from `[guest-export]…` modules. ABI info comes from World B in the manifest.
-* New import classification `Import::GuestResourceDrop { interface, resource }` for
+* New import classification `Import::GuestExportFunc(key, interface, func)` for core
+  imports from `[guest-export]…` modules. ABI info comes from World B, which the
+  encoder builds by importizing `G` from the manifest. Only interfaces `G` exports are
+  accepted (World B's elaboration also pulls in dependencies like `types`).
+* New import classification `Import::GuestResourceDrop(key, resource)` for
   `[guest-export]iface` `[resource-drop]R`, where `R` is a resource the guest defines.
   Its type comes from the guest instance, so it is late-bound like a function.
+* The guest's imports are taken from the *guest binary* (decoded), since those are the
+  names `instantiate` must supply. Each must be in `G`. A guest import that isn't in
+  `G` is currently an error; see §11 for `std`'s WASI imports.
 * Virtual World-A exports are classified as **internal**: they are lifted but not exported.
-* Semver import merging (`merge_imports_based_on_semver`) must not merge a host import
-  with a donut-internal occurrence of the same interface. Exclude manifest-listed keys.
+* Passthrough imports are kept even if the donut's core module doesn't use them.
+  wit-component normally drops unused imports, but the guest needs them.
+* Semver import merging is unchanged. It only touches imports (virtual interfaces are
+  World-A exports) and keeps the highest version. A passthrough import often coincides
+  with one the donut's own Rust `std` already makes (e.g. the guest's
+  `wasi:clocks/…@0.2.0` and std's `@0.2.9`). The guest's import is bound to the merged
+  import by `Resolve::canonicalized_id_of` (both are `…@0.2`). The nested `instantiate`
+  uses the guest's own import name.
 
 Encoding order, extending `encode_with_fixups` / `encode_core_instantiation`:
 
@@ -326,15 +407,15 @@ Encoding order, extending `encode_with_fixups` / `encode_core_instantiation`:
 |---|---|---|---|
 | 1 | `encode_imports`: World-A imports (host + passthrough) | `(import "net" …)` | existing |
 | 2 | `encode_core_modules` | `(core module $Main …)` | existing |
-| 3 | shim instance: `IndirectLowering` for host imports, `ResourceDtor` slots, **plus a `GuestExportLowering` slot for every `[guest-export]` function and a `GuestResourceDrop` slot for every guest-defined resource drop, always indirect** | `$LinkageTable` | add two `ShimKind`s |
+| 3 | shim instance: `IndirectLowering` for host imports, `ResourceDtor` slots, **plus a `GuestExportFunc` slot for every `[guest-export]` function and a `GuestResourceDrop` slot for every guest-defined resource drop, always indirect, placed after all other slots** | `$LinkageTable` | add two `ShimKind`s |
 | 4 | `declare_types_for_imported_intrinsics`: defines virtual resources with dtors from shims | `(type $request (resource (rep i32) (dtor …)))` | existing |
 | 5 | `instantiate_main_module` | `(core instance $main …)` | existing |
 | 6 | **fixup phase 1**: host lowerings, adapters, dtors, `_initialize` | the `elem` segment in `$Main` | split |
-| 7 | lift internal virtual exports and bundle one component instance per interface, without exporting | `(func $send (canon lift …))` | refactor of `encode_exports` |
+| 7 | lift internal virtual exports and build one component instance per interface through `encode_exports`' shim component, without exporting | `(func $send (canon lift …))` | refactor of `encode_exports` |
 | 8 | guest: embed `(component …)` or `(import "guest" (component <type of G>))` | `(import "guest" (component $Guest …))` | new |
 | 9 | `instantiate` the guest: virtual interface → instance from 7; passthrough → host import instance from 1; `guest-root` items flattened to world-level names | `(instance $guest (instantiate $Guest (with …)))` | new |
 | 10 | alias the guest exports and `canon lower` them with main's `memory`, `cabi_realloc`, `string-encoding`; alias guest-defined resource types and emit `canon resource.drop` for them | `(core func $lowered-receive (canon lower …))` | new source for an existing lowering path |
-| 11 | **fixup phase 2**: patch `GuestExportLowering` and `GuestResourceDrop` slots | `$PatchLinkageTable` | split |
+| 11 | **fixup phase 2**: a small `wit-component-donut-fixup` module patches the `GuestExportFunc` and `GuestResourceDrop` slots | `$PatchLinkageTable` | split |
 | 12 | `encode_exports` for World-A's public exports | `(func (export "serve") …)` | existing |
 
 Why two fixup phases: the guest's own initialization (its `_initialize`, Rust `std` startup)
@@ -348,17 +429,32 @@ Type identity needs no special handling in the encoder. In step 9 the guest is
 instantiated with the donut's own `$request`, so the type of `receive` aliased in step 10
 already refers to `$request`. World B is used only for ABI flattening and canon options.
 
+Step 7 must keep wit-component's shim-component wrapping. Validation rejects a plain
+`(instance (export …))` bundle of the lifted funcs with "resource used in function does
+not have a name in this context", because `$request` is defined locally and not
+exported. Resource identity survives the shim. `spike/donut.wat.in` follows this table
+step by step and is the golden output for the encoder.
+
+Because the guest slots come last, the existing (phase 1) fixup fills a prefix of the
+table unchanged. It only imports the table at its full size, and skips guest slots
+when building its "actual" instance.
+
+Not supported yet, and rejected with an error: world-level guest imports and exports
+(`guest-root`), and `return_call_ref` shims.
+
 ### 5.2 Build pipeline and `wasm-component-ld`
 
 **Prototype without touching wasm-component-ld.** It already has `--skip-wit-component`
 (checked on the installed binary), which stops after `wasm-ld` and leaves the linked core
-module, including the custom sections. A standalone `donut-componentize` tool then takes:
+module, including the custom sections. `wasm-tools component new --donut-guest <guest.wasm>`
+(the CLI frontend for wit-component's donut mode) then takes:
 * the core module (from `-Clink-arg=--skip-wit-component`);
 * its `component-type` (World A) and `wit-bindgen-donut` sections;
 * the guest component.
 
 It runs the §5.1 encoding and writes the final component. The intermediate core module
-can't be run on its own; it is only an input to this tool.
+can't be run on its own; it is only an input to this step. The phase-0 spike confirmed
+that a `wasm32-wasip2` core module linked this way needs no preview1 adapter.
 
 **Later integration:**
 * wasm-component-ld detects the `wit-bindgen-donut` section and switches wit-component
@@ -413,16 +509,21 @@ generator also covers the World-A ↔ World-B conversions from §4 step 3.
 ## 7. Guest plugging
 
 * **Embed** (first milestone, and the default): one self-contained component; the guest
-  is chosen when `donut-componentize` (or `--donut-guest`) runs, not when the proc macro
-  expands. Swapping in a compatible guest needs only a re-link, not a Rust rebuild.
-  Before encoding, the tool type-checks the guest's imports and exports against `G`
-  with the resource substitutions applied.
+  is chosen when the encoder runs (`component new --donut-guest`, later the
+  wasm-component-ld `--donut-guest` link arg), not when the proc macro expands. Swapping in a compatible guest needs only a re-link, not a Rust rebuild.
+  Before encoding, the encoder checks that the guest's imports and exports exist in
+  `G`. A type mismatch is currently only caught by the final validation of the output
+  component, without a donut-specific message.
 * **Hole** (later): the donut has a component-typed `guest` import, so one built donut
   can wrap any guest. Plain WIT worlds can't describe component-valued imports, and
-  Wasmtime can't instantiate them. So a small plug step builds the Explainer's
-  `$VirtualizedGuest` grandparent: import the donut's outer imports, embed both components,
-  instantiate, re-export (wasm-encoder only, about 150 lines). It could later move to
-  wasm-tools/wac. Both forms share one `DonutPlan`.
+  Wasmtime can't instantiate them. So a plug step builds the Explainer's
+  `$VirtualizedGuest` grandparent: import the donut's outer imports, embed both
+  components, instantiate the donut with the guest *component* as an argument, and
+  re-export. This is ordinary composition, so it should be a **wac feature**
+  (`wac plug`-style), not a separate tool. wac's type model already has
+  component-typed items (`wac-types` `ItemKind::Component(WorldId)`). The encoder only
+  has to emit the component-typed import instead of an embedded guest. Both forms share
+  one `DonutPlan`.
 
 ## 8. Semantics and pitfalls to document for users
 
@@ -441,7 +542,9 @@ generator also covers the World-A ↔ World-B conversions from §4 step 3.
 * **Out of scope (p2):** async lifts/lowers, `stream`, `future`, `error-context`. The
   macro rejects guest worlds that use them.
 
-## 9. Fallback if the runtime rejects re-entrance
+## 9. Alternatives considered
+
+### 9.1 Split donut (fallback if the runtime rejected re-entrance)
 
 Split the donut into two components with no cycle:
 
@@ -453,57 +556,88 @@ The cost: state shared between A and B has to go over an interface (with copies)
 can't call the guest. The macro could produce this layout as `mode: split` from the same
 inputs. Treat it as a fallback, not the main design.
 
+**Status:** not needed. The phase-0 spike runs the nested, re-entrant layout on
+Wasmtime 49.0.1. 48.0.2 traps, so Wasmtime ≥ 49 is required.
+
+### 9.2 An ordinary donut component, linked by wac with mutual references
+
+Idea: let wac name the donut and the guest first, so each can refer to the other
+when they're linked, and keep the donut an ordinary component built by stock
+tooling. The component binary has no forward references, so wac would have to lower
+the cycle itself by generating **glue** in the scope of the composed component, where
+the donut and the guest are instantiated as siblings:
+
+* **Function cycle:** the glue is a core module with a table and trampolines. The
+  trampolines are lifted and passed to the donut as its guest-export imports. After
+  the guest is instantiated, its exports are lowered and patched into the table. The
+  donut's memory is sealed inside the donut, so the glue needs **its own memory and
+  allocator** for strings and lists. Donut → guest calls are then copied twice.
+* **Type cycle:** the donut can't import `receive(own<request>)` if it defines
+  `request` (2.1). So the glue has to define the virtual resource types instead and
+  pass them in. The donut imports `request` abstractly, plus `resource.new`/`rep`
+  lifted as ordinary functions, and exports its destructor (patched into the type's
+  dtor slot later).
+* **Guest-defined resources** (e.g. `session`) don't exist until the guest is
+  instantiated, after the donut. The glue would have to proxy them with its own
+  resource types and translate handles in the trampolines, which gets hard for handles
+  nested in records and lists.
+
+What it would buy:
+* the donut is an ordinary component, with no wit-component changes;
+* plugging any guest in later comes for free;
+* any language works;
+* the §8 "Lending" restriction goes away, because the donut holds real handles.
+
+What it costs:
+* double copies;
+* a cross-component call for every resource access;
+* guest-resource proxying;
+* code generation in wac (core modules), which wac doesn't do today.
+
+Not pursued: the encoder route (§5) already works and has none of these costs. wac's
+role stays plugging guests into hole-mode donuts (§7).
+
+### 9.3 walrus
+
+walrus transforms core modules only. All the hard parts here are component-level:
+lifts and lowers, resource types, nested instantiation, type encoding. The core
+modules involved (shim, fixups) are tiny and already generated with `wasm-encoder`.
+It would also be an unusual dependency for wit-component, which builds on
+`wasmparser`/`wasm-encoder`.
+
 ## 10. Where to build it, and work breakdown
 
-### 10.1 Recommendation: a new repo, using proxy-component's out-of-tree pattern
+### 10.1 Where each piece lives
 
-Start in a **separate repository**, not in wit-bindgen. Upstream small, generic pieces
-once the end-to-end path works.
+Each piece goes into the repo where it naturally belongs, and is upstreamed from local
+checkouts of those repos. There is no long-lived fork, and generated code is never
+patched with `syn`. `syn` only parses the macro's own input, as `wit-bindgen-rust-macro`
+does.
 
-[proxy-component](https://github.com/chenyan2002/proxy-component) shows that the
-codegen side doesn't need wit-bindgen changes:
-* it calls `wit_bindgen_rust::Opts { .. }.build().generate(..)` as a library (pinned
-  to 0.63.0);
-* it parses the generated source with `syn`;
-* it emits additional impls with `quote` (`State`, `src/traits/proxy.rs`), with
-  snapshot tests (`BLESS=1 cargo test`).
-
-`donut!` can do the same in-process. Every knob §4 needs is either public API already or
-a mechanical patch of the generated source:
-
-| Need (§4) | Out of tree | Later upstream replacement |
+| Piece | Where | Status |
 |---|---|---|
-| World A bindings | `wit_bindgen_rust::Opts` as is | none needed |
-| World B resource remapping | type-level `with` keys (public) | none needed |
-| Suppress colliding resource methods in World B | `skip` (public), or drop the `impl` items with `syn` | "emission purpose" option |
-| `[guest-export]` import modules | rewrite `#[link(wasm_import_module = "…")]` with `syn` | `import_module_prefix` option |
-| No `component-type` section for World B | drop the `#[link_section = "component-type:…"]` item with `syn` | `emit_component_type: false` |
-| World A ↔ B and host ↔ virtual conversions | generate with `quote`, as `ToProxy` does | none needed |
-| Runtime path consistency | set `runtime_path` to the new crate's re-export of `wit_bindgen::rt` | none needed |
+| `[guest-export]` routing + no `component-type` section for World B (§4 step 3) | wit-bindgen-rust: one option, `Opts::import_module_prefix` | done |
+| World B's colliding resource methods (§4 step 3) | DonutPlan strips functions in its private `Resolve` copy | no wit-bindgen change |
+| World B resource remapping (§4 step 3) | type-level `with` keys (existing public API) | no change |
+| `DonutPlan` + `donut!` (§4) | this repo (`crates/donut-plan`, `crates/donut`), consuming the local wit-bindgen/wasm-tools through `[patch.crates-io]` | done |
+| Encoder (§5.1) | wit-component donut mode (`wit_component::donut`, `ComponentEncoder::donut_guest`); CLI `wasm-tools component new --donut-guest` | done |
+| `cargo build` integration (§5.2) | wasm-component-ld `--donut-guest` | later |
+| Conversions and `forward:` (§6) | this repo, emitted as source from the `Resolve` (proxy-component's `ToProxy` technique) | later |
+| Hole-mode plugging (§7) | wac | later |
 
-Why not start in wit-bindgen:
-* **The risky parts aren't in wit-bindgen.** The re-entrance check (Phase 0) and the
-  encoder (§5.1) belong to the runtime and wasm-tools. The encoder internals
-  (`EncodingState`, shims, fixups) are private, so the spike needs a wasm-tools fork
-  wherever the macro lives. proxy-component already depends on a wasm-tools fork for
-  `wasm-wave`.
-* **The API isn't settled.** A public `wit_bindgen::donut!` and new `Opts` fields are
-  hard to change once released. Working end to end first gives upstream PRs a concrete
-  use case.
-* **The upstream asks shrink to three small options** (the right column), each
-  replacing one `syn` patch with a codegen test. That's an easy review, independent of
-  donut wrapping.
+Why this split:
+* **The generator change is small and generic,** so it went upstream first. Patching
+  wit-bindgen's output out of tree (the approach in an earlier version of this section)
+  would have coupled us to the exact shape of the generated code.
+* **The encoder has to live in wit-component.** Its internals (`EncodingState`, shims,
+  fixups) are private, and composition tools can't do the job (§2.2).
+* **`donut!` stays out of wit-bindgen until the API settles.** A public macro and its
+  options are hard to change once released. Moving it into wit-bindgen behind an
+  experimental feature is a later decision.
+* **Only Rust benefits at first.** The manifest (§4 step 4) stays language-neutral, so
+  C/C++/Go generators can target the same encoder later.
 
-Costs, and how to contain them:
-* `syn` patches are coupled to the shape of wit-bindgen's output. proxy-component
-  already depends on details like `RequestBorrow::get` needing ≥ 0.48. Pin
-  `wit-bindgen-rust` exactly, keep snapshot tests, and upstream the three options early
-  so that coupling goes away.
-* Only Rust benefits until the encoder moves into wit-component. The encoder contract
-  (the manifest section) stays language-neutral so C/C++/Go generators can target it
-  later.
-
-Placement: a new repo is cleaner than adding a mode to proxy-component. proxy-component
+Placement: this repo is cleaner than adding a mode to proxy-component. proxy-component
 is a CLI that generates a temp project from a *binary* and composes siblings with wac;
 `donut!` is a library and proc macro for hand-written Rust producing one nested
 component. Shared code (the resource-aware conversion generator, WIT-name utilities) is
@@ -512,17 +646,22 @@ not the binary-crate modules.
 
 ### 10.2 Work breakdown
 
-| Phase | Where | Work | Exit criterion |
-|---|---|---|---|
-| 0 | scratch | Hand-write the WAT for §3.1 (the Explainer layout plus real canon options, including one string/list function and one guest-defined resource); run on the pinned Wasmtime | re-entrance and destructors work, or the §9 decision is made |
-| 1 | wasm-tools fork | `donut-componentize`: §5.1 on top of wit-component internals (`Import::GuestExportFunc`, `GuestResourceDrop`, internal exports, two-phase fixup, embedded-guest instantiation, guest type check) | the Phase-0 example rebuilt from a core module validates and runs |
-| 2 | new repo | `DonutPlan` (§4: classification, both-direction dependency checks, port mappings, manifest); World A and B generation with type-level `with`, `skip`, and `syn` patches; `donut!` frontend; snapshot tests | expands for §3.1, core imports/exports and manifest as expected |
-| 3 | new repo | end to end with `--skip-wit-component` + `donut-componentize`; runtime tests: `serve → receive → send`, exact-once dtors, strings/lists, borrow-in-record, interface on both sides of the guest, guest-defined resources, null-slot trap before linking | tests pass in CI |
-| 4 | new repo | `forward:` (§6) and World A ↔ B conversions, built on the `ToProxy` approach | a passthrough `wasi:http/types` donut forwards a request end to end |
-| 5 | upstream | wit-bindgen: `import_module_prefix`, `emit_component_type`, emission purpose. wit-component: donut mode behind an option. wasm-component-ld: `--donut-guest`. Then drop the `syn` patches and the fork | the new repo builds against released crates |
-| 6 | later | hole mode and the plug step (§7); deciding whether `donut!` moves into `wit-bindgen` behind an experimental feature | — |
+`docs/plan.md` has the detailed steps, exit criteria, and status. Summary:
 
-Phases 1 and 2 can run in parallel once the manifest format (§4 step 4) is fixed.
+| Phase | Where | Work | Status |
+|---|---|---|---|
+| 0 | `spike/` | Hand-assembled donut for §3.1: real wit-bindgen guest and core module, hand-written outer component following §5.1 | done: passes on Wasmtime 49.0.1, traps on 48.0.2 |
+| 1 | wit-bindgen | `import_module_prefix` | done |
+| 2 | this repo | `DonutPlan` (§4) and the `donut!` frontend; snapshot tests | done: `examples/http` passes on Wasmtime 49 |
+| 3 | wit-component | donut mode (§5.1) and `component new --donut-guest`; rebuild the spike from its core module | done; fixtures pending |
+| 4 | this repo | end to end: `serve → receive → send`, exactly-once dtors, strings/lists, borrow-in-record, an interface on both sides of the guest, guest-defined resources, null-slot trap before linking; `wasm32-wasip2` guests | next |
+| 5 | this repo | `forward:` (§6) and World A ↔ B conversions | — |
+| 6 | upstream | wit-component PR; wasm-component-ld `--donut-guest`; decide whether `donut!` moves into wit-bindgen | — |
+| 7 | later | hole mode + wac plugging (§7), p3 (§2.4), other languages | — |
+
+Phases 2 and 3 were done in that order: the manifest was frozen first, the encoder
+was built against the spike's core module, and the macro then generated what the
+spike had by hand.
 
 ## 11. Open questions
 
@@ -531,5 +670,13 @@ Phases 1 and 2 can run in parallel once the manifest format (§4 step 4) is fixe
 2. How should the guest be named in hole mode: always `guest`, or derived from `G`'s name?
 3. Should the manifest reuse wit-component's binary WIT encoding for `G`, or a reference
    into the World-A package plus a world name? Reuse is simpler; a reference is smaller.
+   The implementation (§4 step 4) reuses the encoding.
 4. Upstream naming: "donut" is informal; wit-component might prefer
    `ComponentEncoder::nested_instance`.
+5. Guests built for `wasm32-wasip2` import `std`'s WASI interfaces, which aren't in
+   `G`. Should the encoder treat any guest import outside `G` as passthrough when the
+   donut imports a semver-compatible interface, or add it as a new import of the
+   donut? The first is simpler. The second makes the donut's imports depend on the
+   guest binary.
+6. Should `donut!` support being invoked outside the crate root (e.g. a
+   `bindings_module` option used as the prefix for World B's remap paths)?
