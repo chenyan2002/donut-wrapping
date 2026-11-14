@@ -10,7 +10,7 @@ Companion to `docs/design.md`. Section numbers (§) refer to the design doc.
 | 1 | `import_module_prefix` option | wit-bindgen, branch `donut` | done, committed |
 | 2 | `DonutPlan` + `donut!` | this repo: `crates/`, `examples/http` | done, uncommitted |
 | 3 | wit-component donut mode + `--donut-guest` | wasm-tools, branch `donut` | done, committed; fixtures pending |
-| 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | **next** |
+| 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | wasip2 guests done (uncommitted); runtime tests **next** |
 | 5 | `forward:` and conversions (§6) | this repo | later |
 | 6 | upstream PRs, wasm-component-ld integration | upstream | later |
 | 7 | hole mode + wac plugging, p3, other languages | — | later |
@@ -140,13 +140,16 @@ Remaining:
 
 ## Phase 4: end to end. Next
 
-1. **`wasm32-wasip2` guests.** A guest built for wasip2 imports std's WASI interfaces,
-   which aren't in `G`. The encoder rejects any guest import outside `G` (design §11
-   Q5). Proposed fix: treat it as passthrough when World A imports a
-   semver-compatible interface, and take the needed functions from the decoded guest
-   instead of `G`.
-   * The example needs the real WASI WIT first. Its trimmed `wasi:clocks@0.2.0`
-     conflicts with wasi-libc's copy, so a wasip2 guest doesn't even link today.
+1. **`wasm32-wasip2` guests. Done** (wasm-tools `donut` working tree, uncommitted).
+   * Every guest import that isn't virtualized is now a passthrough, whether or not
+     it's in `G`, bound by `canonicalized_id_of`. Its needed functions *and* types
+     come from the decoded guest's import types (`PassthroughNeeds`), not from `G`.
+   * A guest import the donut doesn't import is an error, with a hint.
+   * `examples/http` now vendors the real WASI 0.2.12 `clocks`/`io` WIT (from
+     wasmtime), and `build.sh` builds two variants. `out/donut.wasm` has guest and
+     donut both on `wasm32-wasip2`, and `run.sh` also checks that the guest's
+     `eprintln!` reaches the host. `out/donut-unknown.wasm` is the
+     `wasm32-unknown-unknown` pair. Both pass on Wasmtime 49.
 2. **Runtime tests** as `cargo test`, using Wasmtime ≥ 49 as a library:
    * `serve → receive → send`, and exactly-once dtors for virtual and guest-defined
      resources (covered by `examples/http` today, through shell scripts);

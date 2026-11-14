@@ -389,8 +389,13 @@ Changes to validation (`validation.rs`):
   `[guest-export]iface` `[resource-drop]R`, where `R` is a resource the guest defines.
   Its type comes from the guest instance, so it is late-bound like a function.
 * The guest's imports are taken from the *guest binary* (decoded), since those are the
-  names `instantiate` must supply. Each must be in `G`. A guest import that isn't in
-  `G` is currently an error; see §11 for `std`'s WASI imports.
+  names `instantiate` must supply. Every import that isn't virtualized is a
+  passthrough, bound to the donut's import of a semver-compatible interface, whether
+  or not it is in `G`. Imports outside `G` are typically added by the guest's
+  toolchain: a `wasm32-wasip2` Rust guest imports `std`'s `wasi:cli/*` and
+  `wasi:io/*`. The functions and types the guest needs are taken from its own import
+  types, and the donut's import must have them. A guest import the donut doesn't
+  import is an error, with a hint to also build the donut for `wasm32-wasip2`.
 * Virtual World-A exports are classified as **internal**: they are lifted but not exported.
 * Passthrough imports are kept even if the donut's core module doesn't use them.
   wit-component normally drops unused imports, but the guest needs them.
@@ -673,10 +678,10 @@ spike had by hand.
    The implementation (§4 step 4) reuses the encoding.
 4. Upstream naming: "donut" is informal; wit-component might prefer
    `ComponentEncoder::nested_instance`.
-5. Guests built for `wasm32-wasip2` import `std`'s WASI interfaces, which aren't in
-   `G`. Should the encoder treat any guest import outside `G` as passthrough when the
-   donut imports a semver-compatible interface, or add it as a new import of the
-   donut? The first is simpler. The second makes the donut's imports depend on the
-   guest binary.
+5. ~~How to handle guest imports outside `G`, such as a `wasm32-wasip2` guest's `std`
+   WASI imports?~~ Resolved: they're passthrough when the donut imports a
+   semver-compatible interface, and an error otherwise (§5.1). Adding them as new
+   donut imports instead would make the donut's imports depend on the guest binary;
+   reconsider for hole mode.
 6. Should `donut!` support being invoked outside the crate root (e.g. a
    `bindings_module` option used as the prefix for World B's remap paths)?

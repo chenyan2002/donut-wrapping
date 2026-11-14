@@ -51,18 +51,42 @@ static mut _RET_AREA: _RetArea = _RetArea(
 #[allow(dead_code, clippy::all)]
 pub mod wasi {
     pub mod clocks {
+        /// WASI Monotonic Clock is a clock API intended to let users measure elapsed
+        /// time.
+        ///
+        /// It is intended to be portable at least between Unix-family platforms and
+        /// Windows.
+        ///
+        /// A monotonic clock is a clock which has an unspecified initial value, and
+        /// successive reads of the clock will produce non-decreasing values.
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
         pub mod monotonic_clock {
             #[used]
             #[doc(hidden)]
             static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
+            /// An instant in time, in nanoseconds. An instant is relative to an
+            /// unspecified initial value, and can only be compared to instances from
+            /// the same monotonic-clock.
             pub type Instant = u64;
+            /// A duration of time, in nanoseconds.
+            pub type Duration = u64;
             #[allow(unused_unsafe, clippy::all)]
+            /// Read the current value of the clock.
+            ///
+            /// The clock is monotonic, therefore calling this function repeatedly will
+            /// produce a sequence of non-decreasing values.
+            ///
+            /// For completeness, this function traps if it's not possible to represent
+            /// the value of the clock in an `instant`. Consequently, implementations
+            /// should ensure that the starting time is low enough to avoid the
+            /// possibility of overflow in practice.
             #[allow(async_fn_in_trait)]
             pub fn now() -> Instant {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "wasi:clocks/monotonic-clock@0.2.0")]
+                    #[link(wasm_import_module = "wasi:clocks/monotonic-clock@0.2.12")]
                     unsafe extern "C" {
                         #[link_name = "now"]
                         fn wit_import0() -> i64;
@@ -73,6 +97,236 @@ pub mod wasi {
                     }
                     let ret = wit_import0();
                     ret as u64
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Query the resolution of the clock. Returns the duration of time
+            /// corresponding to a clock tick.
+            #[allow(async_fn_in_trait)]
+            pub fn resolution() -> Duration {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/monotonic-clock@0.2.12")]
+                    unsafe extern "C" {
+                        #[link_name = "resolution"]
+                        fn wit_import0() -> i64;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0() -> i64 {
+                        unreachable!()
+                    }
+                    let ret = wit_import0();
+                    ret as u64
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Create a `pollable` which will resolve once the specified instant
+            /// has occurred.
+            #[allow(async_fn_in_trait)]
+            pub fn subscribe_instant(when: Instant) -> Pollable {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/monotonic-clock@0.2.12")]
+                    unsafe extern "C" {
+                        #[link_name = "subscribe-instant"]
+                        fn wit_import0(_: i64) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import0(_rt::as_i64(when));
+                    super::super::super::wasi::io::poll::Pollable::from_handle(
+                        ret as u32,
+                    )
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Create a `pollable` that will resolve after the specified duration has
+            /// elapsed from the time this function is invoked.
+            #[allow(async_fn_in_trait)]
+            pub fn subscribe_duration(when: Duration) -> Pollable {
+                unsafe {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:clocks/monotonic-clock@0.2.12")]
+                    unsafe extern "C" {
+                        #[link_name = "subscribe-duration"]
+                        fn wit_import0(_: i64) -> i32;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import0(_: i64) -> i32 {
+                        unreachable!()
+                    }
+                    let ret = wit_import0(_rt::as_i64(when));
+                    super::super::super::wasi::io::poll::Pollable::from_handle(
+                        ret as u32,
+                    )
+                }
+            }
+        }
+    }
+    pub mod io {
+        /// A poll API intended to let users wait for I/O events on multiple handles
+        /// at once.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod poll {
+            #[used]
+            #[doc(hidden)]
+            static __FORCE_SECTION_REF: fn() = super::super::super::__link_custom_section_describing_imports;
+            use super::super::super::_rt;
+            /// `pollable` represents a single I/O event which may be ready, or not.
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct Pollable {
+                handle: _rt::Resource<Pollable>,
+            }
+            impl Pollable {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: unsafe { _rt::Resource::from_handle(handle) },
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for Pollable {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:io/poll@0.2.12")]
+                    unsafe extern "C" {
+                        #[link_name = "[resource-drop]pollable"]
+                        fn drop(_: i32);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn drop(_: i32) {
+                        unreachable!()
+                    }
+                    unsafe {
+                        drop(_handle as i32);
+                    }
+                }
+            }
+            impl Pollable {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Return the readiness of a pollable. This function never blocks.
+                ///
+                /// Returns `true` when the pollable is ready, and `false` otherwise.
+                #[allow(async_fn_in_trait)]
+                pub fn ready(&self) -> bool {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/poll@0.2.12")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]pollable.ready"]
+                            fn wit_import0(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import0(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = wit_import0((self).handle() as i32);
+                        _rt::bool_lift(ret as u8)
+                    }
+                }
+            }
+            impl Pollable {
+                #[allow(unused_unsafe, clippy::all)]
+                /// `block` returns immediately if the pollable is ready, and otherwise
+                /// blocks until ready.
+                ///
+                /// This function is equivalent to calling `poll.poll` on a list
+                /// containing only this pollable.
+                #[allow(async_fn_in_trait)]
+                pub fn block(&self) -> () {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "wasi:io/poll@0.2.12")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]pollable.block"]
+                            fn wit_import0(_: i32);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import0(_: i32) {
+                            unreachable!()
+                        }
+                        wit_import0((self).handle() as i32);
+                    }
+                }
+            }
+            #[allow(unused_unsafe, clippy::all)]
+            /// Poll for completion on a set of pollables.
+            ///
+            /// This function takes a list of pollables, which identify I/O sources of
+            /// interest, and waits until one or more of the events is ready for I/O.
+            ///
+            /// The result `list<u32>` contains one or more indices of handles in the
+            /// argument list that is ready for I/O.
+            ///
+            /// This function traps if either:
+            /// - the list is empty, or:
+            /// - the list contains more elements than can be indexed with a `u32` value.
+            ///
+            /// A timeout can be implemented by adding a pollable from the
+            /// wasi-clocks API to the list.
+            ///
+            /// This function does not return a `result`; polling in itself does not
+            /// do any I/O so it doesn't fail. If any of the I/O sources identified by
+            /// the pollables has an error, it is indicated by marking the source as
+            /// being ready for I/O.
+            #[allow(async_fn_in_trait)]
+            pub fn poll(in_: &[&Pollable]) -> _rt::Vec<u32> {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let vec0 = in_;
+                    let len0 = vec0.len();
+                    let layout0 = _rt::alloc::Layout::from_size_align(vec0.len() * 4, 4)
+                        .unwrap();
+                    let (result0, _cleanup0) = wit_bindgen::rt::Cleanup::new(layout0);
+                    for (i, e) in vec0.into_iter().enumerate() {
+                        let base = result0.add(i * 4);
+                        {
+                            *base.add(0).cast::<i32>() = (e).handle() as i32;
+                        }
+                    }
+                    let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "wasi:io/poll@0.2.12")]
+                    unsafe extern "C" {
+                        #[link_name = "poll"]
+                        fn wit_import2(_: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import2(_: *mut u8, _: usize, _: *mut u8) {
+                        unreachable!()
+                    }
+                    wit_import2(result0, len0, ptr1);
+                    let l3 = *ptr1.add(0).cast::<*mut u8>();
+                    let l4 = *ptr1
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len5 = l4;
+                    let result6 = <_ as From<
+                        _rt::Vec<_>,
+                    >>::from(_rt::Vec::from_raw_parts(l3.cast(), len5, len5));
+                    result6
                 }
             }
         }
@@ -772,20 +1026,6 @@ pub mod exports {
 #[rustfmt::skip]
 mod _rt {
     #![allow(dead_code, unused_imports, clippy::all)]
-    #[cfg(target_arch = "wasm32")]
-    pub fn run_ctors_once() {
-        wit_bindgen::rt::run_ctors_once();
-    }
-    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
-        if size == 0 {
-            return;
-        }
-        unsafe {
-            let layout = alloc::Layout::from_size_align_unchecked(size, align);
-            alloc::dealloc(ptr, layout);
-        }
-    }
-    pub use alloc_crate::string::String;
     use core::fmt;
     use core::marker;
     use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -860,7 +1100,56 @@ mod _rt {
             }
         }
     }
+    pub unsafe fn bool_lift(val: u8) -> bool {
+        if cfg!(debug_assertions) {
+            match val {
+                0 => false,
+                1 => true,
+                _ => panic!("invalid bool discriminant"),
+            }
+        } else {
+            val != 0
+        }
+    }
     pub use alloc_crate::vec::Vec;
+    pub use alloc_crate::alloc;
+    pub fn as_i64<T: AsI64>(t: T) -> i64 {
+        t.as_i64()
+    }
+    pub trait AsI64 {
+        fn as_i64(self) -> i64;
+    }
+    impl<'a, T: Copy + AsI64> AsI64 for &'a T {
+        fn as_i64(self) -> i64 {
+            (*self).as_i64()
+        }
+    }
+    impl AsI64 for i64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
+    impl AsI64 for u64 {
+        #[inline]
+        fn as_i64(self) -> i64 {
+            self as i64
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    pub fn run_ctors_once() {
+        wit_bindgen::rt::run_ctors_once();
+    }
+    pub unsafe fn cabi_dealloc(ptr: *mut u8, size: usize, align: usize) {
+        if size == 0 {
+            return;
+        }
+        unsafe {
+            let layout = alloc::Layout::from_size_align_unchecked(size, align);
+            alloc::dealloc(ptr, layout);
+        }
+    }
+    pub use alloc_crate::string::String;
     pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
         if cfg!(debug_assertions) {
             String::from_utf8(bytes).unwrap()
@@ -928,7 +1217,6 @@ mod _rt {
         }
     }
     pub use alloc_crate::boxed::Box;
-    pub use alloc_crate::alloc;
     extern crate alloc as alloc_crate;
 }
 /// Generates `#[unsafe(no_mangle)]` functions to export the specified type as
@@ -972,21 +1260,28 @@ pub(crate) use __export_donut_a_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 617] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xeb\x03\x01A\x02\x01\
-A\x0a\x01B\x04\x01w\x04\0\x07instant\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x03\
-\0!wasi:clocks/monotonic-clock@0.2.0\x05\0\x01@\0\0s\x04\0\x05serve\x01\x01\x01B\
-\x11\x04\0\x07request\x03\x01\x04\0\x08response\x03\x01\x01i\0\x01@\x01\x04paths\
-\0\x02\x04\0\x14[constructor]request\x01\x03\x01h\0\x01@\x01\x04self\x04\0s\x04\0\
-\x14[method]request.path\x01\x05\x01p}\x01i\x01\x01@\x02\x06status{\x04body\x06\0\
-\x07\x04\0\x15[constructor]response\x01\x08\x01h\x01\x01@\x01\x04self\x09\0{\x04\
-\0\x17[method]response.status\x01\x0a\x01@\x01\x04self\x09\0\x06\x04\0\x15[metho\
-d]response.body\x01\x0b\x04\0\x12example:http/types\x05\x02\x02\x03\0\x01\x07req\
-uest\x02\x03\0\x01\x08response\x01B\x08\x02\x03\x02\x01\x03\x04\0\x07request\x03\
-\0\0\x02\x03\x02\x01\x04\x04\0\x08response\x03\0\x02\x01i\x01\x01i\x03\x01@\x01\x01\
-r\x04\0\x05\x04\0\x04send\x01\x06\x04\0\x15example:http/outgoing\x05\x05\x04\0\x17\
-donut:generated/donut-a\x04\0\x0b\x0d\x01\0\x07donut-a\x03\0\0\0G\x09producers\x01\
-\x0cprocessed-by\x02\x0dwit-component\x070.263.0\x10wit-bindgen-rust\x060.63.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 899] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x85\x06\x01A\x02\x01\
+A\x0d\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
+\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
+ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
+\x03\0\x13wasi:io/poll@0.2.12\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\
+\x01\x01\x04\0\x08pollable\x03\0\0\x01w\x04\0\x07instant\x03\0\x02\x01w\x04\0\x08\
+duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresol\
+ution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\
+\x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0\"wasi:\
+clocks/monotonic-clock@0.2.12\x05\x02\x01@\0\0s\x04\0\x05serve\x01\x03\x01B\x11\x04\
+\0\x07request\x03\x01\x04\0\x08response\x03\x01\x01i\0\x01@\x01\x04paths\0\x02\x04\
+\0\x14[constructor]request\x01\x03\x01h\0\x01@\x01\x04self\x04\0s\x04\0\x14[meth\
+od]request.path\x01\x05\x01p}\x01i\x01\x01@\x02\x06status{\x04body\x06\0\x07\x04\
+\0\x15[constructor]response\x01\x08\x01h\x01\x01@\x01\x04self\x09\0{\x04\0\x17[m\
+ethod]response.status\x01\x0a\x01@\x01\x04self\x09\0\x06\x04\0\x15[method]respon\
+se.body\x01\x0b\x04\0\x12example:http/types\x05\x04\x02\x03\0\x02\x07request\x02\
+\x03\0\x02\x08response\x01B\x08\x02\x03\x02\x01\x05\x04\0\x07request\x03\0\0\x02\
+\x03\x02\x01\x06\x04\0\x08response\x03\0\x02\x01i\x01\x01i\x03\x01@\x01\x01r\x04\
+\0\x05\x04\0\x04send\x01\x06\x04\0\x15example:http/outgoing\x05\x07\x04\0\x17don\
+ut:generated/donut-a\x04\0\x0b\x0d\x01\0\x07donut-a\x03\0\0\0G\x09producers\x01\x0c\
+processed-by\x02\x0dwit-component\x070.263.0\x10wit-bindgen-rust\x060.63.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
@@ -1264,4 +1559,4 @@ mod _rt {
 #[unsafe(link_section = "wit-bindgen-donut:v0")]
 #[used]
 #[doc(hidden)]
-static __DONUT_MANIFEST: [u8; 833] = [0, 148, 6, 0, 97, 115, 109, 13, 0, 1, 0, 0, 25, 22, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 101, 110, 99, 111, 100, 105, 110, 103, 4, 0, 7, 171, 5, 1, 65, 2, 1, 65, 10, 1, 66, 17, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 1, 105, 0, 1, 64, 1, 4, 112, 97, 116, 104, 115, 0, 2, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 113, 117, 101, 115, 116, 1, 3, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 4, 0, 115, 4, 0, 20, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 1, 5, 1, 112, 125, 1, 105, 1, 1, 64, 2, 6, 115, 116, 97, 116, 117, 115, 123, 4, 98, 111, 100, 121, 6, 0, 7, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 115, 112, 111, 110, 115, 101, 1, 8, 1, 104, 1, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 123, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 1, 10, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 6, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 98, 111, 100, 121, 1, 11, 3, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 5, 0, 2, 3, 0, 0, 7, 114, 101, 113, 117, 101, 115, 116, 2, 3, 0, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 1, 66, 8, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 1, 105, 1, 1, 105, 3, 1, 64, 1, 1, 114, 4, 0, 5, 4, 0, 4, 115, 101, 110, 100, 1, 6, 3, 0, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103, 5, 3, 1, 66, 4, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 0, 1, 64, 0, 0, 1, 4, 0, 3, 110, 111, 119, 1, 2, 3, 0, 33, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 48, 5, 4, 1, 66, 17, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 4, 0, 7, 115, 101, 115, 115, 105, 111, 110, 3, 1, 1, 105, 4, 1, 64, 0, 0, 5, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 115, 101, 115, 115, 105, 111, 110, 1, 6, 1, 104, 4, 1, 64, 2, 4, 115, 101, 108, 102, 7, 6, 112, 114, 101, 102, 105, 120, 115, 0, 115, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 115, 101, 115, 115, 105, 111, 110, 46, 100, 101, 115, 99, 114, 105, 98, 101, 1, 8, 1, 105, 1, 1, 105, 3, 1, 64, 2, 1, 115, 7, 1, 114, 9, 0, 10, 4, 0, 7, 114, 101, 99, 101, 105, 118, 101, 1, 11, 1, 64, 0, 0, 121, 4, 0, 7, 100, 114, 111, 112, 112, 101, 100, 1, 12, 4, 0, 20, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 97, 110, 100, 108, 101, 114, 5, 5, 4, 0, 23, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 4, 0, 11, 16, 1, 0, 10, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 3, 0, 0, 0, 47, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 1, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 7, 48, 46, 50, 54, 51, 46, 48, 2, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103];
+static __DONUT_MANIFEST: [u8; 1115] = [0, 174, 8, 0, 97, 115, 109, 13, 0, 1, 0, 0, 25, 22, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 101, 110, 99, 111, 100, 105, 110, 103, 4, 0, 7, 197, 7, 1, 65, 2, 1, 65, 13, 1, 66, 17, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 1, 105, 0, 1, 64, 1, 4, 112, 97, 116, 104, 115, 0, 2, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 113, 117, 101, 115, 116, 1, 3, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 4, 0, 115, 4, 0, 20, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 1, 5, 1, 112, 125, 1, 105, 1, 1, 64, 2, 6, 115, 116, 97, 116, 117, 115, 123, 4, 98, 111, 100, 121, 6, 0, 7, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 115, 112, 111, 110, 115, 101, 1, 8, 1, 104, 1, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 123, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 1, 10, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 6, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 98, 111, 100, 121, 1, 11, 3, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 5, 0, 2, 3, 0, 0, 7, 114, 101, 113, 117, 101, 115, 116, 2, 3, 0, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 1, 66, 8, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 1, 105, 1, 1, 105, 3, 1, 64, 1, 1, 114, 4, 0, 5, 4, 0, 4, 115, 101, 110, 100, 1, 6, 3, 0, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103, 5, 3, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 0, 19, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 49, 50, 5, 4, 2, 3, 0, 2, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 15, 2, 3, 2, 1, 5, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 2, 1, 119, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 4, 1, 64, 0, 0, 3, 4, 0, 3, 110, 111, 119, 1, 6, 1, 64, 0, 0, 5, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 7, 1, 105, 1, 1, 64, 1, 4, 119, 104, 101, 110, 3, 0, 8, 4, 0, 17, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 105, 110, 115, 116, 97, 110, 116, 1, 9, 1, 64, 1, 4, 119, 104, 101, 110, 5, 0, 8, 4, 0, 18, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 100, 117, 114, 97, 116, 105, 111, 110, 1, 10, 3, 0, 34, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 49, 50, 5, 6, 1, 66, 17, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 4, 0, 7, 115, 101, 115, 115, 105, 111, 110, 3, 1, 1, 105, 4, 1, 64, 0, 0, 5, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 115, 101, 115, 115, 105, 111, 110, 1, 6, 1, 104, 4, 1, 64, 2, 4, 115, 101, 108, 102, 7, 6, 112, 114, 101, 102, 105, 120, 115, 0, 115, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 115, 101, 115, 115, 105, 111, 110, 46, 100, 101, 115, 99, 114, 105, 98, 101, 1, 8, 1, 105, 1, 1, 105, 3, 1, 64, 2, 1, 115, 7, 1, 114, 9, 0, 10, 4, 0, 7, 114, 101, 99, 101, 105, 118, 101, 1, 11, 1, 64, 0, 0, 121, 4, 0, 7, 100, 114, 111, 112, 112, 101, 100, 1, 12, 4, 0, 20, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 97, 110, 100, 108, 101, 114, 5, 7, 4, 0, 23, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 4, 0, 11, 16, 1, 0, 10, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 3, 0, 0, 0, 47, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 1, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 7, 48, 46, 50, 54, 51, 46, 48, 2, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103];
