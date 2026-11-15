@@ -46,6 +46,8 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
         virt: HashMap::new(),
         host: HashMap::new(),
         export_res: HashMap::new(),
+        defaults: Default::default(),
+        hook_methods: String::new(),
         out: String::new(),
     };
     for (v, h) in plan.forward_virtual.iter() {
@@ -74,7 +76,7 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
     for e in plan.forward_exports.iter() {
         g.export_interface(*e)?;
     }
-    writeln!(g.out, "}}")?;
+    g.finish()?;
     Ok(g.out)
 }
 
@@ -93,6 +95,10 @@ struct Gen<'a> {
     host: HashMap<TypeId, (TypeId, String)>,
     /// Resource of a forwarded export → wrapper name.
     export_res: HashMap<TypeId, String>,
+    /// Default forwarding functions, by module.
+    defaults: indexmap::IndexMap<String, String>,
+    /// `Hooks` methods, one per forwarded function.
+    hook_methods: String,
     out: String,
 }
 
@@ -138,15 +144,6 @@ pub mod forward {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
             write!(f, "<{}>", self.0)
         }
-    }
-
-    /// Observes every forwarded call. The defaults do nothing, which makes
-    /// forwarding transparent.
-    pub trait Hooks {
-        fn before(call: &Call, args: &[&dyn Debug]) {}
-        fn after(call: &Call, ret: &dyn Debug) {}
-        /// A forwarded resource was dropped by whoever owned it.
-        fn dropped(direction: Direction, interface: &'static str, resource: &'static str) {}
     }
 
     /// Adapts an owned value to how an import takes it (`&str`, `&[T]`, `&T`,
@@ -588,6 +585,19 @@ pub mod forward {
         Ok((sig, params))
     }
 
+    /// The same signature as a free function named `name`: `self` becomes
+    /// `this: &Wrapper`, and a constructor returns the wrapper.
+    fn free_signature(&self, func: &Function, name: &str, wrapper: Option<&str>) -> Result<String> {
+        let (sig, _) = self.signature(func)?;
+        let sig = sig.replacen(&format!("fn {}(", self.fn_name(func)), &format!("fn {name}("), 1);
+        Ok(match wrapper {
+            Some(w) => sig
+                .replacen("(&self, ", &format!("(this: &crate::forward::{w}, "), 1)
+                .replacen(" -> Self", &format!(" -> crate::forward::{w}"), 1),
+            None => sig,
+        })
+    }
+
     fn fn_name(&self, func: &Function) -> String {
         match func.kind {
             FunctionKind::Constructor(_) => "new".into(),
@@ -595,21 +605,65 @@ pub mod forward {
         }
     }
 
-    /// Writes one forwarding function: hooks around a call to `callee`.
-    #[allow(clippy::too_many_arguments)]
-    fn function(
-        &mut self,
-        func: &Function,
-        dir: Dir,
-        iface: &str,
-        callee: String,
-        args: Vec<String>,
-        lets: String,
-        convert_ret: &dyn Fn(&Self, &Type, &str) -> Result<String>,
-        constructor_wrap: Option<String>,
-    ) -> Result<()> {
+    /// Writes one forwarded function:
+    ///
+    /// * `crate::forward::<module>::<fn>`, the default behaviour: convert,
+    ///   call `callee`, convert back;
+    /// * `Hooks::<module>_<fn>`, which defaults to it and can be overridden;
+    /// * the trait impl method, which runs `before`/`after` around the hook.
+    fn function(&mut self, f: Fwd<'_>) -> Result<()> {
+        let func = f.func;
         let (sig, params) = self.signature(func)?;
-        let direction = match dir {
+        let fname = self.fn_name(func);
+        let hook = format!("{}_{fname}", f.module);
+        let is_method = matches!(func.kind, FunctionKind::Method(_));
+        let wrapper = f.wrapper.as_deref();
+        let this_wrapper = if is_method || matches!(func.kind, FunctionKind::Constructor(_)) {
+            wrapper
+        } else {
+            None
+        };
+
+        // The default forwarding function.
+        let mut body = f.lets.clone();
+        let call = format!("{}({})", f.callee, f.args.join(", "));
+        match (&func.kind, &func.result) {
+            (FunctionKind::Constructor(_), _) => {
+                writeln!(body, "crate::forward::{}({call})", f.constructor_wrap.as_deref().unwrap())?;
+            }
+            (_, Some(t)) => {
+                writeln!(body, "let ret = {call};")?;
+                writeln!(body, "{}", (f.convert_ret)(self, t, "ret")?)?;
+            }
+            (_, None) => writeln!(body, "{call};")?,
+        }
+        let free_sig = self.free_signature(func, &fname, this_wrapper)?;
+        self.defaults
+            .entry(f.module.clone())
+            .or_default()
+            .push_str(&format!("        pub {free_sig} {{\n{body}        }}\n"));
+
+        // The overridable hook, defaulting to it.
+        let mut pass = Vec::new();
+        if is_method {
+            pass.push("this".to_string());
+        }
+        pass.extend(params.iter().map(|(n, _)| n.clone()));
+        let hook_sig = self.free_signature(func, &hook, this_wrapper)?;
+        writeln!(
+            self.hook_methods,
+            "        /// `{}` in `{}`. Defaults to forwarding \
+             (`crate::forward::{}::{fname}`).\n        \
+             {hook_sig} {{ crate::forward::{}::{fname}({}) }}",
+            func.name,
+            f.iface,
+            f.module,
+            f.module,
+            pass.join(", ")
+        )?;
+
+        // The trait impl method.
+        let direction = match f.dir {
             Dir::Import => "Import",
             Dir::Export => "Export",
         };
@@ -619,55 +673,56 @@ pub mod forward {
             .collect::<Vec<_>>()
             .join(", ");
         let hooks = &self.hooks;
+        let mut call_args = Vec::new();
+        if is_method {
+            call_args.push("self".to_string());
+        }
+        call_args.extend(params.iter().map(|(n, _)| n.clone()));
         let mut body = format!(
             "let call = crate::forward::Call {{ direction: crate::forward::Direction::{direction}, \
-             interface: \"{iface}\", function: \"{}\" }};\n\
-             <{hooks} as crate::forward::Hooks>::before(&call, &[{debug}]);\n{lets}",
-            func.name
+             interface: \"{}\", function: \"{}\" }};\n\
+             <{hooks} as crate::forward::Hooks>::before(&call, &[{debug}]);\n\
+             let ret = <{hooks} as crate::forward::Hooks>::{hook}({});\n",
+            f.iface,
+            func.name,
+            call_args.join(", ")
         );
-        let call = format!("{callee}({})", args.join(", "));
-        match (&func.kind, &func.result, constructor_wrap) {
-            (FunctionKind::Constructor(_), _, Some(wrap)) => {
-                writeln!(body, "let ret = {call};")?;
-                let res = self.resource_name(func.kind.resource().unwrap());
-                writeln!(body, "<{hooks} as crate::forward::Hooks>::after(&call, &crate::forward::Handle(\"{res}\"));")?;
-                writeln!(body, "{wrap}(ret)")?;
+        let dbg = match (&func.kind, &func.result) {
+            (FunctionKind::Constructor(r), _) => {
+                format!("&crate::forward::Handle(\"{}\")", self.resource_name(*r))
             }
-            (_, Some(t), _) => {
-                writeln!(body, "let ret = {call};")?;
-                writeln!(body, "let ret = {};", convert_ret(self, t, "ret")?)?;
-                let dbg = self.debug_arg(t, "ret");
-                writeln!(body, "<{hooks} as crate::forward::Hooks>::after(&call, {dbg});")?;
-                writeln!(body, "ret")?;
-            }
-            (_, None, _) => {
-                writeln!(body, "{call};")?;
-                writeln!(body, "<{hooks} as crate::forward::Hooks>::after(&call, &());")?;
-            }
-        }
+            (_, Some(t)) => self.debug_arg(t, "ret"),
+            (_, None) => "&ret".to_string(),
+        };
+        writeln!(body, "<{hooks} as crate::forward::Hooks>::after(&call, {dbg});\nret")?;
         writeln!(self.out, "        {sig} {{\n{body}        }}")?;
         Ok(())
+    }
+
+    fn resources(&self, id: InterfaceId) -> Vec<(String, TypeId)> {
+        let resolve = self.resolve;
+        resolve.interfaces[id]
+            .types
+            .iter()
+            .filter(|(_, t)| matches!(resolve.types[**t].kind, TypeDefKind::Resource))
+            .map(|(n, t)| (n.clone(), *t))
+            .collect()
     }
 
     /// A forwarded virtual interface `v` (the guest's copy), implemented by
     /// calling the host's `h`.
     fn virtual_interface(&mut self, v: InterfaceId, h: InterfaceId) -> Result<()> {
         let iface = self.resolve.id_of(h).unwrap();
+        let module = to_rust_ident(iface_name(self.resolve, h));
         let vpath = self.iface_path(v);
         let hpath = self.iface_path(h);
         let resolve = self.resolve;
-        let resources = resolve.interfaces[v]
-            .types
-            .iter()
-            .filter(|(_, t)| matches!(resolve.types[**t].kind, TypeDefKind::Resource))
-            .map(|(n, t)| (n.clone(), *t))
-            .collect::<Vec<_>>();
+        let resources = self.resources(v);
         for (_, r) in resources.iter() {
             let (host_r, w) = self.virt[r].clone();
             self.host_wrapper(*r, host_r, &w, &iface)?;
         }
 
-        // The interface's free functions, and its resource types.
         writeln!(self.out, "    impl {vpath}::Guest for {} {{", self.hooks)?;
         for (name, r) in resources.iter() {
             writeln!(self.out, "        type {} = {};", camel(name), self.virt[r].1)?;
@@ -677,16 +732,18 @@ pub mod forward {
                 continue;
             }
             let (args, lets) = self.host_args(func, 0)?;
-            self.function(
+            self.function(Fwd {
                 func,
-                Dir::Import,
-                &iface,
-                format!("{hpath}::{}", self.fn_name(func)),
+                dir: Dir::Import,
+                iface: iface.clone(),
+                module: module.clone(),
+                wrapper: None,
+                callee: format!("{hpath}::{}", self.fn_name(func)),
                 args,
                 lets,
-                &|g, t, e| g.host_to_virt(t, e),
-                None,
-            )?;
+                convert_ret: &|g, t, e| g.host_to_virt(t, e),
+                constructor_wrap: None,
+            })?;
         }
         writeln!(self.out, "    }}")?;
 
@@ -698,15 +755,24 @@ pub mod forward {
                     continue;
                 }
                 let host_r = format!("{hpath}::{}", camel(name));
-                let (callee, skip, wrap) = match func.kind {
-                    FunctionKind::Method(_) => (format!("self.host().{}", self.fn_name(func)), 1, None),
-                    FunctionKind::Constructor(_) => {
-                        (format!("{host_r}::new"), 0, Some("Self::owned".to_string()))
-                    }
-                    _ => (format!("{host_r}::{}", self.fn_name(func)), 0, None),
+                let (callee, skip) = match func.kind {
+                    FunctionKind::Method(_) => (format!("this.host().{}", self.fn_name(func)), 1),
+                    FunctionKind::Constructor(_) => (format!("{host_r}::new"), 0),
+                    _ => (format!("{host_r}::{}", self.fn_name(func)), 0),
                 };
                 let (args, lets) = self.host_args(func, skip)?;
-                self.function(func, Dir::Import, &iface, callee, args, lets, &|g, t, e| g.host_to_virt(t, e), wrap)?;
+                self.function(Fwd {
+                    func,
+                    dir: Dir::Import,
+                    iface: iface.clone(),
+                    module: format!("{module}_{}", to_rust_ident(name)),
+                    wrapper: Some(w.clone()),
+                    callee,
+                    args,
+                    lets,
+                    convert_ret: &|g, t, e| g.host_to_virt(t, e),
+                    constructor_wrap: Some(format!("{w}::owned")),
+                })?;
             }
             writeln!(self.out, "    }}")?;
         }
@@ -737,15 +803,11 @@ pub mod forward {
     /// A forwarded export `e`, implemented by calling the guest's `e`.
     fn export_interface(&mut self, e: InterfaceId) -> Result<()> {
         let iface = self.resolve.id_of(e).unwrap();
+        let module = to_rust_ident(iface_name(self.resolve, e));
         let epath = self.iface_path(e);
         let gpath = self.guest_path(e);
         let resolve = self.resolve;
-        let resources = resolve.interfaces[e]
-            .types
-            .iter()
-            .filter(|(_, t)| matches!(resolve.types[**t].kind, TypeDefKind::Resource))
-            .map(|(n, t)| (n.clone(), *t))
-            .collect::<Vec<_>>();
+        let resources = self.resources(e);
         for (_, r) in resources.iter() {
             let w = self.export_res[r].clone();
             self.guest_wrapper(*r, e, &w, &iface)?;
@@ -760,16 +822,18 @@ pub mod forward {
                 continue;
             }
             let (args, lets) = self.guest_args(func, 0)?;
-            self.function(
+            self.function(Fwd {
                 func,
-                Dir::Export,
-                &iface,
-                format!("{gpath}::{}", self.fn_name(func)),
+                dir: Dir::Export,
+                iface: iface.clone(),
+                module: module.clone(),
+                wrapper: None,
+                callee: format!("{gpath}::{}", self.fn_name(func)),
                 args,
                 lets,
-                &|g, t, e| g.guest_to_host(t, e),
-                None,
-            )?;
+                convert_ret: &|g, t, e| g.guest_to_host(t, e),
+                constructor_wrap: None,
+            })?;
         }
         writeln!(self.out, "    }}")?;
 
@@ -781,18 +845,81 @@ pub mod forward {
                     continue;
                 }
                 let guest_r = format!("{gpath}::{}", camel(name));
-                let (callee, skip, wrap) = match func.kind {
-                    FunctionKind::Method(_) => (format!("self.guest().{}", self.fn_name(func)), 1, None),
-                    FunctionKind::Constructor(_) => {
-                        (format!("{guest_r}::new"), 0, Some("Self::wrap".to_string()))
-                    }
-                    _ => (format!("{guest_r}::{}", self.fn_name(func)), 0, None),
+                let (callee, skip) = match func.kind {
+                    FunctionKind::Method(_) => (format!("this.guest().{}", self.fn_name(func)), 1),
+                    FunctionKind::Constructor(_) => (format!("{guest_r}::new"), 0),
+                    _ => (format!("{guest_r}::{}", self.fn_name(func)), 0),
                 };
                 let (args, lets) = self.guest_args(func, skip)?;
-                self.function(func, Dir::Export, &iface, callee, args, lets, &|g, t, e| g.guest_to_host(t, e), wrap)?;
+                self.function(Fwd {
+                    func,
+                    dir: Dir::Export,
+                    iface: iface.clone(),
+                    module: format!("{module}_{}", to_rust_ident(name)),
+                    wrapper: Some(w.clone()),
+                    callee,
+                    args,
+                    lets,
+                    convert_ret: &|g, t, e| g.guest_to_host(t, e),
+                    constructor_wrap: Some(format!("{w}::wrap")),
+                })?;
             }
             writeln!(self.out, "    }}")?;
         }
         Ok(())
     }
+
+    /// The default forwarding functions, one module per interface or
+    /// resource, and the `Hooks` trait.
+    fn finish(&mut self) -> Result<()> {
+        for (module, fns) in std::mem::take(&mut self.defaults) {
+            writeln!(
+                self.out,
+                "    /// The default (forwarding) behaviour, which `Hooks` overrides can call.\n    \
+                 pub mod {module} {{\n{fns}    }}"
+            )?;
+        }
+        let methods = std::mem::take(&mut self.hook_methods);
+        write!(
+            self.out,
+            r#"
+    /// Observes and controls every forwarded call.
+    ///
+    /// `before`, `after`, and `dropped` observe every call and drop. The other
+    /// methods, one per forwarded function, are what the generated impls call.
+    /// They default to forwarding (the functions in this module), and can be
+    /// overridden to change a function's behaviour; an override can still
+    /// call the default. Observation runs around overrides too.
+    pub trait Hooks {{
+        fn before(call: &Call, args: &[&dyn Debug]) {{}}
+        fn after(call: &Call, ret: &dyn Debug) {{}}
+        /// A forwarded resource was dropped by whoever owned it.
+        fn dropped(direction: Direction, interface: &'static str, resource: &'static str) {{}}
+{methods}    }}
+}}
+"#
+        )?;
+        Ok(())
+    }
+}
+
+/// One forwarded function, for `Gen::function`.
+struct Fwd<'a> {
+    func: &'a Function,
+    dir: Dir,
+    /// The WIT interface name, for `Call`.
+    iface: String,
+    /// `<iface>` or `<iface>_<resource>`: the module of the default, and the
+    /// prefix of the hook method.
+    module: String,
+    /// The wrapper of the resource this function belongs to, if any.
+    wrapper: Option<String>,
+    /// What the default calls.
+    callee: String,
+    args: Vec<String>,
+    /// Statements before the call (lent temporaries).
+    lets: String,
+    convert_ret: &'a dyn Fn(&Gen<'_>, &Type, &str) -> Result<String>,
+    /// For constructors: wraps the new resource (`crate::forward::<this>`).
+    constructor_wrap: Option<String>,
 }

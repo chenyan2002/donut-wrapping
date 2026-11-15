@@ -3,15 +3,13 @@ members = [
   "crates/donut-plan",
   "crates/donut",
   "crates/donut-tests",
-  "examples/http/guest",
-  "examples/http/server",
+  "examples/virtualize/guest",
+  "examples/virtualize/donut",
+  "examples/virtualize/init/donut",
+  "examples/forward/app",
+  "examples/forward/recorder",
+  "examples/forward/interceptor",
   "examples/fastly/host",
-  "examples/shapes/guest",
-  "examples/shapes/donut",
-  "examples/shapes/init-donut",
-  "examples/record/app",
-  "examples/record/recorder",
-  "examples/record/forwarder",
 ]
 exclude = ["spike"]
 resolver = "2"
@@ -24,6 +22,7 @@ license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
 [workspace.dependencies]
 anyhow = "1"
 heck = "0.5"
+indexmap = "2"
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2", features = ["full"] }

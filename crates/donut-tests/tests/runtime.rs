@@ -6,45 +6,22 @@ fn lines(s: &str) -> Vec<&str> {
     s.lines().collect()
 }
 
-/// `examples/http`: re-entrance (`serve → receive → send`), exactly-once
-/// destructors of virtual and guest-defined resources, strings and lists, and
-/// the guest's clock passthrough.
+/// `examples/virtualize`, one run of `serve` covering:
+/// * re-entrance (`serve → receive → send`) and exactly-once destructors of
+///   virtual and guest-defined resources;
+/// * strings and lists in both directions;
+/// * a borrow inside a record (both directions), and an owned handle inside a
+///   returned record whose destructor runs when the guest drops it;
+/// * `relay`, imported and exported by the guest (a middleware), re-lending a
+///   borrow it was given;
+/// * passthrough: the guest's clock import and its `std` WASI (stderr).
 #[test]
-fn http_wasip2() -> anyhow::Result<()> {
-    let dir = build("http")?;
+fn virtualize() -> anyhow::Result<()> {
+    let dir = build("virtualize")?;
     let run = call::<(), (String,)>(&dir.join("out/donut.wasm"), "serve", ())?;
     let expected = std::fs::read_to_string(dir.join("expected.txt"))?;
     assert_eq!(lines(&run.result.0), lines(&expected));
-    // The guest's own `std` WASI imports (not in its world) are passed through.
     assert_eq!(run.stderr, "guest: receive in session 1\n");
-    Ok(())
-}
-
-#[test]
-fn http_unknown_unknown() -> anyhow::Result<()> {
-    let dir = build("http")?;
-    let run = call::<(), (String,)>(&dir.join("out/donut-unknown.wasm"), "serve", ())?;
-    let expected = std::fs::read_to_string(dir.join("expected.txt"))?;
-    assert_eq!(lines(&run.result.0), lines(&expected));
-    Ok(())
-}
-
-/// `examples/shapes`: a borrow inside a record in both directions, an owned
-/// handle inside a returned record (its destructor runs when the guest drops
-/// it), and `handler` imported and exported by the guest (a middleware).
-#[test]
-fn shapes_records_and_middleware() -> anyhow::Result<()> {
-    let dir = build("shapes")?;
-    let run = call::<(), (String,)>(&dir.join("out/donut.wasm"), "run", ())?;
-    assert_eq!(
-        lines(&run.result.0),
-        [
-            "dtor:token(wrapped7)",
-            "guest(name=t1, inspected=t1#from-guest, wrapped=wrapped7:7, \
-             downstream=downstream(t1#run+mw))",
-            "dtor:token(t1)",
-        ]
-    );
     Ok(())
 }
 
@@ -52,7 +29,7 @@ fn shapes_records_and_middleware() -> anyhow::Result<()> {
 /// is instantiated: the donut's first fixup phase must be done by then.
 #[test]
 fn guest_start_calls_virtual_function() -> anyhow::Result<()> {
-    let dir = build("shapes")?;
+    let dir = build("virtualize")?;
     let run = call::<(), (u32,)>(&dir.join("out/init-tick.wasm"), "run", ())?;
     assert_eq!(run.result.0, 1);
     Ok(())
@@ -63,7 +40,7 @@ fn guest_start_calls_virtual_function() -> anyhow::Result<()> {
 /// cleanly (design §8, "Calls before linking").
 #[test]
 fn guest_start_calling_back_into_guest_traps() -> anyhow::Result<()> {
-    let dir = build("shapes")?;
+    let dir = build("virtualize")?;
     let err = match call::<(), (u32,)>(&dir.join("out/init-tick-reentrant.wasm"), "run", ()) {
         Ok(_) => panic!("expected instantiation to trap"),
         Err(e) => format!("{e:?}"),

@@ -1,0 +1,27 @@
+package example:rec;
+
+// A host service with a resource.
+interface kv {
+  resource store {
+    set: func(key: string, value: string);
+    get: func(key: string) -> option<string>;
+  }
+  open: func(name: string) -> store;
+}
+
+// What the app exports. `session` is defined by the app.
+interface app {
+  use kv.{store};
+  resource session {
+    constructor(user: string);
+    greet: func(s: borrow<store>) -> string;
+  }
+  run: func(s: borrow<store>) -> string;
+}
+
+// The app's world, and also the recording donut's: the donut has the same
+// imports and exports as the app it wraps.
+world app-world {
+  import kv;
+  export app;
+}

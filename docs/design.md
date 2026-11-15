@@ -7,7 +7,7 @@ with `docs/p2-donut-wrapping-astra.md` and reviewing
 * `DonutPlan` and the `donut!` macro (§4, this repo);
 * wit-component's donut mode and `wasm-tools component new --donut-guest` (§5).
 
-The examples (`examples/http`, `examples/shapes`, and `examples/fastly`, a mock
+The examples (`examples/virtualize`, `examples/forward`, and `examples/fastly`, a mock
 Fastly host around a real Fastly Compute guest) build with `donut!` and run on
 Wasmtime 49 in `cargo test -p donut-tests`. `spike/` is the hand-assembled golden
 output for §5.1. `docs/plan.md` has the status, the branches
@@ -530,9 +530,23 @@ Conversions are structure-directed, and only for values containing forwarded
 resources. Resource-free types are shared, because `merge_structurally_equal_types`
 is on for World A. Import calls go through a generated `forward::Arg` trait
 instead of re-encoding wit-bindgen's parameter conventions.
-`examples/record/forwarder` is the recorder written this way. Not yet: records or
-variants containing forwarded resources, non-top-level borrows, and per-method
-interception (`RHooks`).
+`examples/forward/recorder` is the recorder written this way.
+
+**Per-method interception** (the `RHooks` idea above) is part of the same
+`forward::Hooks` trait. There's one method per forwarded function, named
+`<iface>_<fn>` or `<iface>_<resource>_<fn>` (e.g. `kv_store_get`,
+`app_session_greet`).
+* Each defaults to forwarding, through a generated free function
+  (`forward::kv_store::get`) that an override can still call, like `super`.
+* The generated trait impls call `before`, then the hook method, then `after`, so
+  observation covers overridden methods too.
+* `examples/forward/interceptor` hides a key from the app and decorates one guest
+  result.
+
+A single trait means users write one `impl` and override only what they need.
+
+Not yet: records or variants containing forwarded resources, and non-top-level
+borrows.
 
 **Prior art:** [proxy-component](https://github.com/chenyan2002/proxy-component)
 (`src/traits/proxy.rs`) already generates this kind of conversion as a `ToProxy` trait,
@@ -691,7 +705,7 @@ not the binary-crate modules.
 |---|---|---|---|
 | 0 | `spike/` | Hand-assembled donut for §3.1: real wit-bindgen guest and core module, hand-written outer component following §5.1 | done: passes on Wasmtime 49.0.1, traps on 48.0.2 |
 | 1 | wit-bindgen | `import_module_prefix` | done |
-| 2 | this repo | `DonutPlan` (§4) and the `donut!` frontend; snapshot tests | done: `examples/http` passes on Wasmtime 49 |
+| 2 | this repo | `DonutPlan` (§4) and the `donut!` frontend; snapshot tests | done: `examples/virtualize` passes on Wasmtime 49 |
 | 3 | wit-component | donut mode (§5.1) and `component new --donut-guest`; rebuild the spike from its core module | done; fixtures pending |
 | 4 | this repo | end to end: `serve → receive → send`, exactly-once dtors, strings/lists, borrow-in-record, an interface on both sides of the guest, guest-defined resources, null-slot trap before linking; `wasm32-wasip2` guests | next |
 | 5 | this repo | `forward:` (§6) and World A ↔ B conversions | — |

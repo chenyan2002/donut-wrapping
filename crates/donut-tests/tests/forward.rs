@@ -1,7 +1,7 @@
-//! `examples/record`: a recording donut (proxy-component's record mode as one
-//! component) has the same world as the app it wraps. Run the app bare and
-//! wrapped on the same host `kv`: the results must be identical, and the
-//! wrapper must have recorded every call in both directions.
+//! `examples/forward`: donuts with generated forwarding (`forward:`) around an
+//! app, with the same world as the app (`import kv; export app`), run on a
+//! wasmtime host `kv` next to the bare app. The hand-written equivalent of the
+//! recorder is `spike/recorder`.
 
 use donut_tests::build;
 use std::collections::HashMap;
@@ -12,7 +12,7 @@ use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
 wasmtime::component::bindgen!({
-    path: "../../examples/record/wit",
+    path: "../../examples/forward/wit",
     world: "example:rec/app-world",
     with: { "example:rec/kv.store": KvStore },
 });
@@ -93,54 +93,14 @@ fn drive(component: &Path) -> wasmtime::Result<Outcome> {
     })
 }
 
+/// The recorder: transparent (same results and host calls as the bare app),
+/// and its `Hooks` see every call and drop, in both directions.
 #[test]
-fn recorder_is_transparent_and_records_both_directions() -> anyhow::Result<()> {
-    let dir = build("record")?;
+fn recorder_is_transparent_and_sees_every_call() -> anyhow::Result<()> {
+    let dir = build("forward")?;
     let w = |e: wasmtime::Error| anyhow::anyhow!("{e:?}");
     let bare = drive(&dir.join("out/app.wasm")).map_err(w)?;
     let wrapped = drive(&dir.join("out/recorder.wasm")).map_err(w)?;
-
-    // Transparent: same results, same host calls.
-    assert_eq!(
-        bare.results,
-        [
-            "visits=Some(\"1\") cache=Some(\"v\")",
-            "hello ann (visits=Some(\"1\"))",
-        ]
-    );
-    assert_eq!(wrapped.results, bare.results);
-    assert_eq!(wrapped.host_calls, bare.host_calls);
-    assert!(bare.stdout.is_empty());
-
-    // Recorded, in order: host → app calls (exports), and the app's calls to
-    // the host (imports), interleaved on the same stack.
-    assert_eq!(
-        wrapped.stdout.lines().collect::<Vec<_>>(),
-        [
-            "record: export app.run",
-            "record: import store.set(\"visits\", \"1\")",
-            "record: import kv.open(\"cache\")",
-            "record: import store.set(\"k\", \"v\")",
-            "record: import store.get(\"visits\") -> Some(\"1\")",
-            "record: import store.get(\"k\") -> Some(\"v\")",
-            "record: export app.run -> \"visits=Some(\\\"1\\\") cache=Some(\\\"v\\\")\"",
-            "record: export session.new(\"ann\")",
-            "record: import store.get(\"visits\") -> Some(\"1\")",
-            "record: export session.greet -> \"hello ann (visits=Some(\\\"1\\\"))\"",
-            "record: export session.drop",
-        ]
-    );
-    Ok(())
-}
-
-/// The same recording donut with generated forwarding (`forward:`): just as
-/// transparent, and its hooks see every call and drop.
-#[test]
-fn generated_forwarding_is_transparent_and_hooks_see_every_call() -> anyhow::Result<()> {
-    let dir = build("record")?;
-    let w = |e: wasmtime::Error| anyhow::anyhow!("{e:?}");
-    let bare = drive(&dir.join("out/app.wasm")).map_err(w)?;
-    let wrapped = drive(&dir.join("out/forwarder.wasm")).map_err(w)?;
     assert_eq!(wrapped.results, bare.results);
     assert_eq!(wrapped.host_calls, bare.host_calls);
     assert_eq!(
@@ -169,6 +129,35 @@ fn generated_forwarding_is_transparent_and_hooks_see_every_call() -> anyhow::Res
             "record: Export example:rec/app.[method]session.greet -> \"hello ann (visits=Some(\\\"1\\\"))\"",
             "record: Export example:rec/app.session dropped",
         ]
+    );
+    Ok(())
+}
+
+/// Overriding generated hooks: `kv_store_get` hides `visits` from the app
+/// (without calling the host), and `app_session_greet` decorates the guest's
+/// answer. Everything else still forwards, and observation sees the
+/// overridden calls.
+#[test]
+fn overridden_hooks_change_behaviour() -> anyhow::Result<()> {
+    let dir = build("forward")?;
+    let w = |e: wasmtime::Error| anyhow::anyhow!("{e:?}");
+    let bare = drive(&dir.join("out/app.wasm")).map_err(w)?;
+    let wrapped = drive(&dir.join("out/interceptor.wasm")).map_err(w)?;
+    assert_eq!(
+        wrapped.results,
+        [
+            "visits=None cache=Some(\"v\")",
+            "hello ann (visits=None) [intercepted]",
+        ]
+    );
+    // The host never saw the hidden `get`s; it saw everything else.
+    let expected_host: Vec<_> = bare.host_calls.iter().filter(|c| *c != "get visits").cloned().collect();
+    assert_eq!(wrapped.host_calls, expected_host);
+    assert!(wrapped.stdout.contains("Import [method]store.get -> None"), "{}", wrapped.stdout);
+    assert!(
+        wrapped.stdout.contains("Export [method]session.greet -> \"hello ann (visits=None) [intercepted]\""),
+        "{}",
+        wrapped.stdout
     );
     Ok(())
 }

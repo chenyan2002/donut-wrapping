@@ -1,0 +1,12 @@
+[package]
+name = "forward-recorder"
+edition.workspace = true
+version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }
+donut = { workspace = true }

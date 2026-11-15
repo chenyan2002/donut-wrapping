@@ -1,0 +1,83 @@
+// Plain virtualization (design §3.1), with the WIT shapes that need care.
+package example:virt;
+
+interface types {
+  resource request {
+    constructor(path: string);
+    path: func() -> string;
+  }
+  resource response {
+    constructor(status: u16, body: list<u8>);
+    status: func() -> u16;
+    body: func() -> list<u8>;
+  }
+  // A borrow inside a record.
+  record tagged { req: borrow<request>, tag: string }
+  // An owned handle inside a record.
+  record wrapped { resp: response, note: string }
+}
+
+// Virtualized: what the guest calls in the donut.
+interface outgoing {
+  use types.{request, response, tagged, wrapped};
+  send: func(r: request) -> response;
+  inspect: func(t: tagged) -> string;
+  wrap: func(status: u16) -> wrapped;
+}
+
+// Exported by the guest.
+interface handler {
+  use types.{request, response};
+
+  // Defined by the guest: the donut must late-bind its `resource.drop`.
+  resource session {
+    constructor();
+    describe: func(prefix: string) -> string;
+  }
+
+  receive: func(s: borrow<session>, r: request) -> response;
+  // Number of `session` destructors that ran inside the guest.
+  dropped: func() -> u32;
+}
+
+// Imported by the guest (virtualized: the donut's downstream) *and* exported by
+// it: the guest is a middleware in front of the donut.
+interface relay {
+  use types.{tagged};
+  relay: func(t: tagged) -> string;
+}
+
+world guest {
+  import outgoing;
+  import relay;
+  import wasi:clocks/monotonic-clock@0.2.12;   // passthrough
+  export handler;
+  export relay;
+}
+
+world donut {
+  export serve: func() -> string;
+}
+
+// --- instantiation-time behaviour (WAT guests in init/) ---
+
+interface init-host {
+  // Counts calls.
+  tick: func() -> u32;
+  // Calls the guest's `probe.ticks`, which can't work before the guest is
+  // linked: trapping is the expected behaviour.
+  tick-reentrant: func() -> u32;
+}
+
+interface probe {
+  ticks: func() -> u32;
+}
+
+world init-guest {
+  import init-host;
+  export probe;
+}
+
+world init-donut {
+  export run: func() -> u32;
+}

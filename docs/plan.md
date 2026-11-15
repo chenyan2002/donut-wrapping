@@ -8,7 +8,7 @@ Companion to `docs/design.md`. Section numbers (§) refer to the design doc.
 |---|---|---|---|
 | 0 | WAT spike: hand-assembled donut | `spike/` | done |
 | 1 | `import_module_prefix` option | wit-bindgen, branch `donut` | done, committed |
-| 2 | `DonutPlan` + `donut!` | this repo: `crates/`, `examples/http` | done, uncommitted |
+| 2 | `DonutPlan` + `donut!` | this repo: `crates/`, `examples/` | done, uncommitted |
 | 3 | wit-component donut mode + `--donut-guest` | wasm-tools, branch `donut` | done, committed; fixtures pending |
 | 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | done (uncommitted); CI pending |
 | 5 | `forward:` and conversions (§6) | this repo | first cut of generated forwarding done (uncommitted) |
@@ -18,7 +18,25 @@ Companion to `docs/design.md`. Section numbers (§) refer to the design doc.
 The whole pipeline works for the §3.1 example:
 1. `donut!` generates the donut's core module;
 2. `wasm-tools component new --donut-guest` embeds the guest;
-3. the component runs on Wasmtime 49 with the expected event log (`examples/http`).
+3. the component runs on Wasmtime 49 with the expected event log (`examples/virtualize`).
+
+## Examples
+
+| Example | What it shows | Tests (`crates/donut-tests`) |
+|---|---|---|
+| `examples/virtualize` | plain virtualization: re-entrance, exactly-once destructors, strings and lists, a guest-defined resource, a borrow and an owned handle inside records, `relay` imported and exported by the guest (a middleware), and passthrough of the guest's clock and `std` WASI. `init/` has two WAT guests whose start functions call the donut. | `virtualize`, `guest_start_calls_virtual_function`, `guest_start_calling_back_into_guest_traps` |
+| `examples/forward` | generated forwarding around an app with the same world as the donut: `recorder` (hooks observe every call) and `interceptor` (two functions overridden) | `recorder_is_transparent_and_sees_every_call`, `overridden_hooks_change_behaviour` |
+| `examples/fastly` | a mock Fastly Compute host around a real Fastly guest (proxy-component's `tests/rust.wasm`): 60 virtual functions | `fastly_guest` |
+
+* Every example's `build.sh` sources `examples/common.sh`: `guest`, `wat_guest`, and
+  `donut` (core module plus `component new --donut-guest`).
+* Guests and donuts are built for `wasm32-wasip2`.
+* `spike/` keeps the hand-written references: the phase-0 component in WAT, and
+  `spike/recorder`, the hand-written recorder that `forward:` now generates.
+
+`examples/virtualize` merges the former `examples/http` and `examples/shapes`, and
+`examples/forward` was `examples/record`. The phase notes below mention the old
+names.
 
 ## Branches and build base
 
@@ -222,14 +240,21 @@ see every call and drop in both directions. Generated pieces:
     So wit-bindgen's import-parameter rules aren't reproduced.
   * Trait impl signatures use wit-bindgen's export-side (all-owned) rule.
 
+**Per-method interception: done.** `forward::Hooks` has one overridable method
+per forwarded function (`kv_store_get`, `app_session_greet`, ...). Each defaults to
+a generated forwarding function (`forward::kv_store::get`) that an override can
+call. The generated impls run `before` and `after` around it.
+`examples/record/interceptor` and the `overridden_hooks_change_behaviour` test
+cover it: a hidden key never reaches the host, and a decorated guest result is
+returned to the host.
+
 Not supported yet (rejected with an error):
 * records and variants that contain forwarded resources;
 * borrows of forwarded resources other than top-level parameters;
 * world-level items.
 
 Forwarded exports with records from other interfaces need World B to reuse World
-A's types (see below). Per-method interception (overriding one method's
-behaviour, design §6's `RHooks`) isn't generated yet; hooks only observe.
+A's types (see below).
 
 Remaining:
 

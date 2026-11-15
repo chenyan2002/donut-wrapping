@@ -336,7 +336,7 @@ pub mod wasi {
 #[allow(dead_code, clippy::all)]
 pub mod exports {
     pub mod example {
-        pub mod http {
+        pub mod virt {
             #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
             pub mod types {
                 #[used]
@@ -461,7 +461,7 @@ pub mod exports {
                     #[inline]
                     unsafe fn drop(_handle: u32) {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-drop]request"]
                             fn drop(_: i32);
@@ -593,7 +593,7 @@ pub mod exports {
                     #[inline]
                     unsafe fn drop(_handle: u32) {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-drop]response"]
                             fn drop(_: i32);
@@ -605,6 +605,38 @@ pub mod exports {
                         unsafe {
                             drop(_handle as i32);
                         }
+                    }
+                }
+                /// A borrow inside a record.
+                pub struct Tagged<'a> {
+                    pub req: RequestBorrow<'a>,
+                    pub tag: _rt::String,
+                }
+                impl<'a> ::core::fmt::Debug for Tagged<'a> {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("Tagged")
+                            .field("req", &self.req)
+                            .field("tag", &self.tag)
+                            .finish()
+                    }
+                }
+                /// An owned handle inside a record.
+                pub struct Wrapped {
+                    pub resp: Response,
+                    pub note: _rt::String,
+                }
+                impl ::core::fmt::Debug for Wrapped {
+                    fn fmt(
+                        &self,
+                        f: &mut ::core::fmt::Formatter<'_>,
+                    ) -> ::core::fmt::Result {
+                        f.debug_struct("Wrapped")
+                            .field("resp", &self.resp)
+                            .field("note", &self.note)
+                            .finish()
                     }
                 }
                 #[doc(hidden)]
@@ -758,7 +790,7 @@ pub mod exports {
                         Self: Sized,
                     {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-new]request"]
                             fn new(_: *mut u8) -> i32;
@@ -775,7 +807,7 @@ pub mod exports {
                         Self: Sized,
                     {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-rep]request"]
                             fn rep(_: i32) -> *mut u8;
@@ -837,7 +869,7 @@ pub mod exports {
                         Self: Sized,
                     {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-new]response"]
                             fn new(_: *mut u8) -> i32;
@@ -854,7 +886,7 @@ pub mod exports {
                         Self: Sized,
                     {
                         #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "[export]example:http/types")]
+                        #[link(wasm_import_module = "[export]example:virt/types")]
                         unsafe extern "C" {
                             #[link_name = "[resource-rep]response"]
                             fn rep(_: i32) -> *mut u8;
@@ -912,57 +944,57 @@ pub mod exports {
                     fn body(&self) -> _rt::Vec<u8>;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_example_http_types_cabi {
+                macro_rules! __export_example_virt_types_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[unsafe (export_name =
-                        "example:http/types#[constructor]request")] unsafe extern "C" fn
+                        "example:virt/types#[constructor]request")] unsafe extern "C" fn
                         export_constructor_request(arg0 : * mut u8, arg1 : usize,) -> i32
                         { unsafe { $($path_to_types)*::
                         _export_constructor_request_cabi::<<$ty as $($path_to_types)*::
                         Guest >::Request > (arg0, arg1) } } #[unsafe (export_name =
-                        "example:http/types#[method]request.path")] unsafe extern "C" fn
+                        "example:virt/types#[method]request.path")] unsafe extern "C" fn
                         export_method_request_path(arg0 : * mut u8,) -> * mut u8 { unsafe
                         { $($path_to_types)*:: _export_method_request_path_cabi::<<$ty as
                         $($path_to_types)*:: Guest >::Request > (arg0) } } #[unsafe
                         (export_name =
-                        "cabi_post_example:http/types#[method]request.path")] unsafe
+                        "cabi_post_example:virt/types#[method]request.path")] unsafe
                         extern "C" fn _post_return_method_request_path(arg0 : * mut u8,)
                         { unsafe { $($path_to_types)*::
                         __post_return_method_request_path::<<$ty as $($path_to_types)*::
                         Guest >::Request > (arg0) } } #[unsafe (export_name =
-                        "example:http/types#[constructor]response")] unsafe extern "C" fn
+                        "example:virt/types#[constructor]response")] unsafe extern "C" fn
                         export_constructor_response(arg0 : i32, arg1 : * mut u8, arg2 :
                         usize,) -> i32 { unsafe { $($path_to_types)*::
                         _export_constructor_response_cabi::<<$ty as $($path_to_types)*::
                         Guest >::Response > (arg0, arg1, arg2) } } #[unsafe (export_name
-                        = "example:http/types#[method]response.status")] unsafe extern
+                        = "example:virt/types#[method]response.status")] unsafe extern
                         "C" fn export_method_response_status(arg0 : * mut u8,) -> i32 {
                         unsafe { $($path_to_types)*::
                         _export_method_response_status_cabi::<<$ty as
                         $($path_to_types)*:: Guest >::Response > (arg0) } } #[unsafe
-                        (export_name = "example:http/types#[method]response.body")]
+                        (export_name = "example:virt/types#[method]response.body")]
                         unsafe extern "C" fn export_method_response_body(arg0 : * mut
                         u8,) -> * mut u8 { unsafe { $($path_to_types)*::
                         _export_method_response_body_cabi::<<$ty as $($path_to_types)*::
                         Guest >::Response > (arg0) } } #[unsafe (export_name =
-                        "cabi_post_example:http/types#[method]response.body")] unsafe
+                        "cabi_post_example:virt/types#[method]response.body")] unsafe
                         extern "C" fn _post_return_method_response_body(arg0 : * mut u8,)
                         { unsafe { $($path_to_types)*::
                         __post_return_method_response_body::<<$ty as $($path_to_types)*::
                         Guest >::Response > (arg0) } } const _ : () = { #[doc(hidden)]
-                        #[unsafe (export_name = "example:http/types#[dtor]request")]
+                        #[unsafe (export_name = "example:virt/types#[dtor]request")]
                         #[allow(non_snake_case)] unsafe extern "C" fn dtor(rep : * mut
                         u8) { unsafe { $($path_to_types)*:: Request::dtor::< <$ty as
                         $($path_to_types)*:: Guest >::Request > (rep) } } }; const _ : ()
                         = { #[doc(hidden)] #[unsafe (export_name =
-                        "example:http/types#[dtor]response")] #[allow(non_snake_case)]
+                        "example:virt/types#[dtor]response")] #[allow(non_snake_case)]
                         unsafe extern "C" fn dtor(rep : * mut u8) { unsafe {
                         $($path_to_types)*:: Response::dtor::< <$ty as
                         $($path_to_types)*:: Guest >::Response > (rep) } } }; };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_example_http_types_cabi;
+                pub(crate) use __export_example_virt_types_cabi;
                 #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                 #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
                 struct _RetArea(
@@ -975,20 +1007,25 @@ pub mod exports {
                         * ::core::mem::size_of::<*const u8>()],
                 );
             }
+            /// Virtualized: what the guest calls in the donut.
             #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
             pub mod outgoing {
                 #[used]
                 #[doc(hidden)]
                 static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
                 use super::super::super::super::_rt;
-                pub type Request = super::super::super::super::exports::example::http::types::Request;
-                pub type RequestBorrow<'a> = super::super::super::super::exports::example::http::types::RequestBorrow<
+                pub type Request = super::super::super::super::exports::example::virt::types::Request;
+                pub type RequestBorrow<'a> = super::super::super::super::exports::example::virt::types::RequestBorrow<
                     'a,
                 >;
-                pub type Response = super::super::super::super::exports::example::http::types::Response;
-                pub type ResponseBorrow<'a> = super::super::super::super::exports::example::http::types::ResponseBorrow<
+                pub type Response = super::super::super::super::exports::example::virt::types::Response;
+                pub type ResponseBorrow<'a> = super::super::super::super::exports::example::virt::types::ResponseBorrow<
                     'a,
                 >;
+                pub type Tagged<'a> = super::super::super::super::exports::example::virt::types::Tagged<
+                    'a,
+                >;
+                pub type Wrapped = super::super::super::super::exports::example::virt::types::Wrapped;
                 #[doc(hidden)]
                 #[allow(non_snake_case, unused_unsafe)]
                 pub unsafe fn _export_send_cabi<T_: Guest>(arg0: i32) -> i32 {
@@ -996,7 +1033,7 @@ pub mod exports {
                         #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
                         let result0 = {
                             T_::send(
-                                super::super::super::super::exports::example::http::types::Request::from_handle(
+                                super::super::super::super::exports::example::virt::types::Request::from_handle(
                                     arg0 as u32,
                                 ),
                             )
@@ -1004,21 +1041,217 @@ pub mod exports {
                         (result0).take_handle() as i32
                     }
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case, unused_unsafe)]
+                pub unsafe fn _export_inspect_cabi<T_: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                        let result1 = {
+                            let len0 = arg2;
+                            let bytes0 = _rt::Vec::from_raw_parts(
+                                arg1.cast(),
+                                len0,
+                                len0,
+                            );
+                            T_::inspect(super::super::super::super::exports::example::virt::types::Tagged {
+                                req: super::super::super::super::exports::example::virt::types::RequestBorrow::lift(
+                                    core::ptr::with_exposed_provenance(arg0 as u32 as usize),
+                                ),
+                                tag: _rt::string_lift(bytes0),
+                            })
+                        };
+                        let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                        let vec3 = (result1.into_bytes()).into_boxed_slice();
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
+                        ::core::mem::forget(vec3);
+                        *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len3;
+                        *ptr2.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                        ptr2
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_inspect<T_: Guest>(arg0: *mut u8) {
+                    unsafe {
+                        let l0 = *arg0.add(0).cast::<*mut u8>();
+                        let l1 = *arg0
+                            .add(::core::mem::size_of::<*const u8>())
+                            .cast::<usize>();
+                        _rt::cabi_dealloc(l0, l1, 1);
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case, unused_unsafe)]
+                pub unsafe fn _export_wrap_cabi<T_: Guest>(arg0: i32) -> *mut u8 {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                        let result0 = { T_::wrap(arg0 as u16) };
+                        let ptr1 = (&raw mut _RET_AREA.0).cast::<u8>();
+                        let super::super::super::super::exports::example::virt::types::Wrapped {
+                            resp: resp2,
+                            note: note2,
+                        } = result0;
+                        *ptr1.add(0).cast::<i32>() = (resp2).take_handle() as i32;
+                        let vec3 = (note2.into_bytes()).into_boxed_slice();
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
+                        ::core::mem::forget(vec3);
+                        *ptr1
+                            .add(2 * ::core::mem::size_of::<*const u8>())
+                            .cast::<usize>() = len3;
+                        *ptr1
+                            .add(::core::mem::size_of::<*const u8>())
+                            .cast::<*mut u8>() = ptr3.cast_mut();
+                        ptr1
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_wrap<T_: Guest>(arg0: *mut u8) {
+                    unsafe {
+                        let l0 = *arg0
+                            .add(::core::mem::size_of::<*const u8>())
+                            .cast::<*mut u8>();
+                        let l1 = *arg0
+                            .add(2 * ::core::mem::size_of::<*const u8>())
+                            .cast::<usize>();
+                        _rt::cabi_dealloc(l0, l1, 1);
+                    }
+                }
                 pub trait Guest {
                     #[allow(async_fn_in_trait)]
                     fn send(r: Request) -> Response;
+                    #[allow(async_fn_in_trait)]
+                    fn inspect(t: Tagged<'_>) -> _rt::String;
+                    #[allow(async_fn_in_trait)]
+                    fn wrap(status: u16) -> Wrapped;
                 }
                 #[doc(hidden)]
-                macro_rules! __export_example_http_outgoing_cabi {
+                macro_rules! __export_example_virt_outgoing_cabi {
                     ($ty:ident with_types_in $($path_to_types:tt)*) => {
                         const _ : () = { #[unsafe (export_name =
-                        "example:http/outgoing#send")] unsafe extern "C" fn
+                        "example:virt/outgoing#send")] unsafe extern "C" fn
                         export_send(arg0 : i32,) -> i32 { unsafe { $($path_to_types)*::
-                        _export_send_cabi::<$ty > (arg0) } } };
+                        _export_send_cabi::<$ty > (arg0) } } #[unsafe (export_name =
+                        "example:virt/outgoing#inspect")] unsafe extern "C" fn
+                        export_inspect(arg0 : i32, arg1 : * mut u8, arg2 : usize,) -> *
+                        mut u8 { unsafe { $($path_to_types)*:: _export_inspect_cabi::<$ty
+                        > (arg0, arg1, arg2) } } #[unsafe (export_name =
+                        "cabi_post_example:virt/outgoing#inspect")] unsafe extern "C" fn
+                        _post_return_inspect(arg0 : * mut u8,) { unsafe {
+                        $($path_to_types)*:: __post_return_inspect::<$ty > (arg0) } }
+                        #[unsafe (export_name = "example:virt/outgoing#wrap")] unsafe
+                        extern "C" fn export_wrap(arg0 : i32,) -> * mut u8 { unsafe {
+                        $($path_to_types)*:: _export_wrap_cabi::<$ty > (arg0) } }
+                        #[unsafe (export_name = "cabi_post_example:virt/outgoing#wrap")]
+                        unsafe extern "C" fn _post_return_wrap(arg0 : * mut u8,) { unsafe
+                        { $($path_to_types)*:: __post_return_wrap::<$ty > (arg0) } } };
                     };
                 }
                 #[doc(hidden)]
-                pub(crate) use __export_example_http_outgoing_cabi;
+                pub(crate) use __export_example_virt_outgoing_cabi;
+                #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                struct _RetArea(
+                    [::core::mem::MaybeUninit<
+                        u8,
+                    >; 3 * ::core::mem::size_of::<*const u8>()],
+                );
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 3
+                        * ::core::mem::size_of::<*const u8>()],
+                );
+            }
+            /// Imported by the guest (virtualized: the donut's downstream) *and* exported by
+            /// it: the guest is a middleware in front of the donut.
+            #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+            pub mod relay {
+                #[used]
+                #[doc(hidden)]
+                static __FORCE_SECTION_REF: fn() = super::super::super::super::__link_custom_section_describing_imports;
+                use super::super::super::super::_rt;
+                pub type Tagged<'a> = super::super::super::super::exports::example::virt::types::Tagged<
+                    'a,
+                >;
+                #[doc(hidden)]
+                #[allow(non_snake_case, unused_unsafe)]
+                pub unsafe fn _export_relay_cabi<T_: Guest>(
+                    arg0: i32,
+                    arg1: *mut u8,
+                    arg2: usize,
+                ) -> *mut u8 {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                        let result1 = {
+                            let len0 = arg2;
+                            let bytes0 = _rt::Vec::from_raw_parts(
+                                arg1.cast(),
+                                len0,
+                                len0,
+                            );
+                            T_::relay(super::super::super::super::exports::example::virt::types::Tagged {
+                                req: super::super::super::super::exports::example::virt::types::RequestBorrow::lift(
+                                    core::ptr::with_exposed_provenance(arg0 as u32 as usize),
+                                ),
+                                tag: _rt::string_lift(bytes0),
+                            })
+                        };
+                        let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
+                        let vec3 = (result1.into_bytes()).into_boxed_slice();
+                        let ptr3 = vec3.as_ptr().cast::<u8>();
+                        let len3 = vec3.len();
+                        ::core::mem::forget(vec3);
+                        *ptr2.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len3;
+                        *ptr2.add(0).cast::<*mut u8>() = ptr3.cast_mut();
+                        ptr2
+                    }
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_relay<T_: Guest>(arg0: *mut u8) {
+                    unsafe {
+                        let l0 = *arg0.add(0).cast::<*mut u8>();
+                        let l1 = *arg0
+                            .add(::core::mem::size_of::<*const u8>())
+                            .cast::<usize>();
+                        _rt::cabi_dealloc(l0, l1, 1);
+                    }
+                }
+                pub trait Guest {
+                    #[allow(async_fn_in_trait)]
+                    fn relay(t: Tagged<'_>) -> _rt::String;
+                }
+                #[doc(hidden)]
+                macro_rules! __export_example_virt_relay_cabi {
+                    ($ty:ident with_types_in $($path_to_types:tt)*) => {
+                        const _ : () = { #[unsafe (export_name =
+                        "example:virt/relay#relay")] unsafe extern "C" fn
+                        export_relay(arg0 : i32, arg1 : * mut u8, arg2 : usize,) -> * mut
+                        u8 { unsafe { $($path_to_types)*:: _export_relay_cabi::<$ty >
+                        (arg0, arg1, arg2) } } #[unsafe (export_name =
+                        "cabi_post_example:virt/relay#relay")] unsafe extern "C" fn
+                        _post_return_relay(arg0 : * mut u8,) { unsafe {
+                        $($path_to_types)*:: __post_return_relay::<$ty > (arg0) } } };
+                    };
+                }
+                #[doc(hidden)]
+                pub(crate) use __export_example_virt_relay_cabi;
+                #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                struct _RetArea(
+                    [::core::mem::MaybeUninit<
+                        u8,
+                    >; 2 * ::core::mem::size_of::<*const u8>()],
+                );
+                static mut _RET_AREA: _RetArea = _RetArea(
+                    [::core::mem::MaybeUninit::uninit(); 2
+                        * ::core::mem::size_of::<*const u8>()],
+                );
             }
         }
     }
@@ -1244,11 +1477,14 @@ macro_rules! __export_donut_a_impl {
     ($ty:ident with_types_in $($path_to_types_root:tt)*) => {
         $($path_to_types_root)*:: __export_world_donut_a_cabi!($ty with_types_in
         $($path_to_types_root)*); $($path_to_types_root)*::
-        exports::example::http::types::__export_example_http_types_cabi!($ty
-        with_types_in $($path_to_types_root)*:: exports::example::http::types);
+        exports::example::virt::types::__export_example_virt_types_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::example::virt::types);
         $($path_to_types_root)*::
-        exports::example::http::outgoing::__export_example_http_outgoing_cabi!($ty
-        with_types_in $($path_to_types_root)*:: exports::example::http::outgoing);
+        exports::example::virt::outgoing::__export_example_virt_outgoing_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::example::virt::outgoing);
+        $($path_to_types_root)*::
+        exports::example::virt::relay::__export_example_virt_relay_cabi!($ty
+        with_types_in $($path_to_types_root)*:: exports::example::virt::relay);
     };
 }
 #[doc(inline)]
@@ -1260,9 +1496,9 @@ pub(crate) use __export_donut_a_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 899] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x85\x06\x01A\x02\x01\
-A\x0d\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 1113] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xdb\x07\x01A\x02\x01\
+A\x11\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\
 \x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]p\
 ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\
 \x03\0\x13wasi:io/poll@0.2.12\x05\0\x02\x03\0\0\x08pollable\x01B\x0f\x02\x03\x02\
@@ -1270,18 +1506,24 @@ ollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\
 duration\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresol\
 ution\x01\x07\x01i\x01\x01@\x01\x04when\x03\0\x08\x04\0\x11subscribe-instant\x01\
 \x09\x01@\x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0\"wasi:\
-clocks/monotonic-clock@0.2.12\x05\x02\x01@\0\0s\x04\0\x05serve\x01\x03\x01B\x11\x04\
-\0\x07request\x03\x01\x04\0\x08response\x03\x01\x01i\0\x01@\x01\x04paths\0\x02\x04\
-\0\x14[constructor]request\x01\x03\x01h\0\x01@\x01\x04self\x04\0s\x04\0\x14[meth\
-od]request.path\x01\x05\x01p}\x01i\x01\x01@\x02\x06status{\x04body\x06\0\x07\x04\
-\0\x15[constructor]response\x01\x08\x01h\x01\x01@\x01\x04self\x09\0{\x04\0\x17[m\
-ethod]response.status\x01\x0a\x01@\x01\x04self\x09\0\x06\x04\0\x15[method]respon\
-se.body\x01\x0b\x04\0\x12example:http/types\x05\x04\x02\x03\0\x02\x07request\x02\
-\x03\0\x02\x08response\x01B\x08\x02\x03\x02\x01\x05\x04\0\x07request\x03\0\0\x02\
-\x03\x02\x01\x06\x04\0\x08response\x03\0\x02\x01i\x01\x01i\x03\x01@\x01\x01r\x04\
-\0\x05\x04\0\x04send\x01\x06\x04\0\x15example:http/outgoing\x05\x07\x04\0\x17don\
-ut:generated/donut-a\x04\0\x0b\x0d\x01\0\x07donut-a\x03\0\0\0G\x09producers\x01\x0c\
-processed-by\x02\x0dwit-component\x070.263.0\x10wit-bindgen-rust\x060.63.0";
+clocks/monotonic-clock@0.2.12\x05\x02\x01@\0\0s\x04\0\x05serve\x01\x03\x01B\x15\x04\
+\0\x07request\x03\x01\x04\0\x08response\x03\x01\x01h\0\x01r\x02\x03req\x02\x03ta\
+gs\x04\0\x06tagged\x03\0\x03\x01i\x01\x01r\x02\x04resp\x05\x04notes\x04\0\x07wra\
+pped\x03\0\x06\x01i\0\x01@\x01\x04paths\0\x08\x04\0\x14[constructor]request\x01\x09\
+\x01@\x01\x04self\x02\0s\x04\0\x14[method]request.path\x01\x0a\x01p}\x01@\x02\x06\
+status{\x04body\x0b\0\x05\x04\0\x15[constructor]response\x01\x0c\x01h\x01\x01@\x01\
+\x04self\x0d\0{\x04\0\x17[method]response.status\x01\x0e\x01@\x01\x04self\x0d\0\x0b\
+\x04\0\x15[method]response.body\x01\x0f\x04\0\x12example:virt/types\x05\x04\x02\x03\
+\0\x02\x07request\x02\x03\0\x02\x08response\x02\x03\0\x02\x06tagged\x02\x03\0\x02\
+\x07wrapped\x01B\x10\x02\x03\x02\x01\x05\x04\0\x07request\x03\0\0\x02\x03\x02\x01\
+\x06\x04\0\x08response\x03\0\x02\x02\x03\x02\x01\x07\x04\0\x06tagged\x03\0\x04\x02\
+\x03\x02\x01\x08\x04\0\x07wrapped\x03\0\x06\x01i\x01\x01i\x03\x01@\x01\x01r\x08\0\
+\x09\x04\0\x04send\x01\x0a\x01@\x01\x01t\x05\0s\x04\0\x07inspect\x01\x0b\x01@\x01\
+\x06status{\0\x07\x04\0\x04wrap\x01\x0c\x04\0\x15example:virt/outgoing\x05\x09\x01\
+B\x04\x02\x03\x02\x01\x07\x04\0\x06tagged\x03\0\0\x01@\x01\x01t\x01\0s\x04\0\x05\
+relay\x01\x02\x04\0\x12example:virt/relay\x05\x0a\x04\0\x17donut:generated/donut\
+-a\x04\0\x0b\x0d\x01\0\x07donut-a\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\
+\x0dwit-component\x070.263.0\x10wit-bindgen-rust\x060.63.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
@@ -1293,15 +1535,50 @@ pub fn __link_custom_section_describing_imports() {
 pub mod guest {
 // Generated by `wit-bindgen` 0.63.0. DO NOT EDIT!
 // Options used:
-//   * with "example:http/types/request" = "crate::exports::example::http::types::Request"
-//   * with "example:http/types/response" = "crate::exports::example::http::types::Response"
+//   * with "example:virt/types/request" = "crate::exports::example::virt::types::Request"
+//   * with "example:virt/types/response" = "crate::exports::example::virt::types::Response"
 //   * import_module_prefix: "[guest-export]"
 #[rustfmt::skip]
 #[allow(dead_code, clippy::all)]
 pub mod example {
-    pub mod http {
+    pub mod virt {
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
-        pub mod types {}
+        pub mod types {
+            use super::super::super::_rt;
+            /// A borrow inside a record.
+            pub struct Tagged<'a> {
+                pub req: &'a crate::exports::example::virt::types::Request,
+                pub tag: _rt::String,
+            }
+            impl<'a> ::core::fmt::Debug for Tagged<'a> {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Tagged")
+                        .field("req", &self.req)
+                        .field("tag", &self.tag)
+                        .finish()
+                }
+            }
+            /// An owned handle inside a record.
+            pub struct Wrapped {
+                pub resp: crate::exports::example::virt::types::Response,
+                pub note: _rt::String,
+            }
+            impl ::core::fmt::Debug for Wrapped {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("Wrapped")
+                        .field("resp", &self.resp)
+                        .field("note", &self.note)
+                        .finish()
+                }
+            }
+        }
+        /// Exported by the guest.
         #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
         pub mod handler {
             use super::super::super::_rt;
@@ -1331,7 +1608,7 @@ pub mod example {
                 #[inline]
                 unsafe fn drop(_handle: u32) {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "[guest-export]example:http/handler")]
+                    #[link(wasm_import_module = "[guest-export]example:virt/handler")]
                     unsafe extern "C" {
                         #[link_name = "[resource-drop]session"]
                         fn drop(_: i32);
@@ -1352,7 +1629,7 @@ pub mod example {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
                         #[link(
-                            wasm_import_module = "[guest-export]example:http/handler"
+                            wasm_import_module = "[guest-export]example:virt/handler"
                         )]
                         unsafe extern "C" {
                             #[link_name = "[constructor]session"]
@@ -1389,7 +1666,7 @@ pub mod example {
                         let ptr1 = ret_area.0.as_mut_ptr().cast::<u8>();
                         #[cfg(target_arch = "wasm32")]
                         #[link(
-                            wasm_import_module = "[guest-export]example:http/handler"
+                            wasm_import_module = "[guest-export]example:virt/handler"
                         )]
                         unsafe extern "C" {
                             #[link_name = "[method]session.describe"]
@@ -1420,11 +1697,11 @@ pub mod example {
             #[allow(async_fn_in_trait)]
             pub fn receive(
                 s: &Session,
-                r: crate::exports::example::http::types::Request,
-            ) -> crate::exports::example::http::types::Response {
+                r: crate::exports::example::virt::types::Request,
+            ) -> crate::exports::example::virt::types::Response {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "[guest-export]example:http/handler")]
+                    #[link(wasm_import_module = "[guest-export]example:virt/handler")]
                     unsafe extern "C" {
                         #[link_name = "receive"]
                         fn wit_import0(_: i32, _: i32) -> i32;
@@ -1437,7 +1714,7 @@ pub mod example {
                         (s).handle() as i32,
                         (&r).take_handle() as i32,
                     );
-                    crate::exports::example::http::types::Response::from_handle(
+                    crate::exports::example::virt::types::Response::from_handle(
                         ret as u32,
                     )
                 }
@@ -1448,7 +1725,7 @@ pub mod example {
             pub fn dropped() -> u32 {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "[guest-export]example:http/handler")]
+                    #[link(wasm_import_module = "[guest-export]example:virt/handler")]
                     unsafe extern "C" {
                         #[link_name = "dropped"]
                         fn wit_import0() -> i32;
@@ -1462,11 +1739,68 @@ pub mod example {
                 }
             }
         }
+        /// Imported by the guest (virtualized: the donut's downstream) *and* exported by
+        /// it: the guest is a middleware in front of the donut.
+        #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
+        pub mod relay {
+            use super::super::super::_rt;
+            pub type Tagged<'a> = super::super::super::example::virt::types::Tagged<'a>;
+            #[allow(unused_unsafe, clippy::all)]
+            #[allow(async_fn_in_trait)]
+            pub fn relay(t: &Tagged<'_>) -> _rt::String {
+                unsafe {
+                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                    struct RetArea(
+                        [::core::mem::MaybeUninit<
+                            u8,
+                        >; 2 * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let mut ret_area = RetArea(
+                        [::core::mem::MaybeUninit::uninit(); 2
+                            * ::core::mem::size_of::<*const u8>()],
+                    );
+                    let super::super::super::example::virt::types::Tagged {
+                        req: req0,
+                        tag: tag0,
+                    } = t;
+                    let vec1 = tag0;
+                    let ptr1 = vec1.as_ptr().cast::<u8>();
+                    let len1 = vec1.len();
+                    let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
+                    #[cfg(target_arch = "wasm32")]
+                    #[link(wasm_import_module = "[guest-export]example:virt/relay")]
+                    unsafe extern "C" {
+                        #[link_name = "relay"]
+                        fn wit_import3(_: i32, _: *mut u8, _: usize, _: *mut u8);
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unsafe extern "C" fn wit_import3(
+                        _: i32,
+                        _: *mut u8,
+                        _: usize,
+                        _: *mut u8,
+                    ) {
+                        unreachable!()
+                    }
+                    wit_import3((req0).handle() as i32, ptr1.cast_mut(), len1, ptr2);
+                    let l4 = *ptr2.add(0).cast::<*mut u8>();
+                    let l5 = *ptr2
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    let len6 = l5;
+                    let bytes6 = _rt::Vec::from_raw_parts(l4.cast(), len6, len6);
+                    let result7 = _rt::string_lift(bytes6);
+                    result7
+                }
+            }
+        }
     }
 }
 #[rustfmt::skip]
 mod _rt {
     #![allow(dead_code, unused_imports, clippy::all)]
+    pub use alloc_crate::string::String;
     use core::fmt;
     use core::marker;
     use core::sync::atomic::{AtomicU32, Ordering::Relaxed};
@@ -1541,7 +1875,6 @@ mod _rt {
             }
         }
     }
-    pub use alloc_crate::string::String;
     pub use alloc_crate::vec::Vec;
     pub unsafe fn string_lift(bytes: Vec<u8>) -> String {
         if cfg!(debug_assertions) {
@@ -1559,4 +1892,4 @@ mod _rt {
 #[unsafe(link_section = "wit-bindgen-donut:v0")]
 #[used]
 #[doc(hidden)]
-static __DONUT_MANIFEST: [u8; 1156] = [0, 174, 8, 0, 97, 115, 109, 13, 0, 1, 0, 0, 25, 22, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 101, 110, 99, 111, 100, 105, 110, 103, 4, 0, 7, 197, 7, 1, 65, 2, 1, 65, 13, 1, 66, 17, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 1, 105, 0, 1, 64, 1, 4, 112, 97, 116, 104, 115, 0, 2, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 113, 117, 101, 115, 116, 1, 3, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 4, 0, 115, 4, 0, 20, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 1, 5, 1, 112, 125, 1, 105, 1, 1, 64, 2, 6, 115, 116, 97, 116, 117, 115, 123, 4, 98, 111, 100, 121, 6, 0, 7, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 115, 112, 111, 110, 115, 101, 1, 8, 1, 104, 1, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 123, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 1, 10, 1, 64, 1, 4, 115, 101, 108, 102, 9, 0, 6, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 98, 111, 100, 121, 1, 11, 3, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 5, 0, 2, 3, 0, 0, 7, 114, 101, 113, 117, 101, 115, 116, 2, 3, 0, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 1, 66, 8, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 1, 105, 1, 1, 105, 3, 1, 64, 1, 1, 114, 4, 0, 5, 4, 0, 4, 115, 101, 110, 100, 1, 6, 3, 0, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103, 5, 3, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 0, 19, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 49, 50, 5, 4, 2, 3, 0, 2, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 15, 2, 3, 2, 1, 5, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 2, 1, 119, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 4, 1, 64, 0, 0, 3, 4, 0, 3, 110, 111, 119, 1, 6, 1, 64, 0, 0, 5, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 7, 1, 105, 1, 1, 64, 1, 4, 119, 104, 101, 110, 3, 0, 8, 4, 0, 17, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 105, 110, 115, 116, 97, 110, 116, 1, 9, 1, 64, 1, 4, 119, 104, 101, 110, 5, 0, 8, 4, 0, 18, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 100, 117, 114, 97, 116, 105, 111, 110, 1, 10, 3, 0, 34, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 49, 50, 5, 6, 1, 66, 17, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 4, 0, 7, 115, 101, 115, 115, 105, 111, 110, 3, 1, 1, 105, 4, 1, 64, 0, 0, 5, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 115, 101, 115, 115, 105, 111, 110, 1, 6, 1, 104, 4, 1, 64, 2, 4, 115, 101, 108, 102, 7, 6, 112, 114, 101, 102, 105, 120, 115, 0, 115, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 115, 101, 115, 115, 105, 111, 110, 46, 100, 101, 115, 99, 114, 105, 98, 101, 1, 8, 1, 105, 1, 1, 105, 3, 1, 64, 2, 1, 115, 7, 1, 114, 9, 0, 10, 4, 0, 7, 114, 101, 99, 101, 105, 118, 101, 1, 11, 1, 64, 0, 0, 121, 4, 0, 7, 100, 114, 111, 112, 112, 101, 100, 1, 12, 4, 0, 20, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 97, 110, 100, 108, 101, 114, 5, 7, 4, 0, 23, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 4, 0, 11, 16, 1, 0, 10, 104, 116, 116, 112, 45, 103, 117, 101, 115, 116, 3, 0, 0, 0, 47, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 1, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 7, 48, 46, 50, 54, 51, 46, 48, 2, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 18, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 116, 121, 112, 101, 115, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103, 21, 101, 120, 97, 109, 112, 108, 101, 58, 104, 116, 116, 112, 47, 111, 117, 116, 103, 111, 105, 110, 103];
+static __DONUT_MANIFEST: [u8; 1459] = [0, 183, 10, 0, 97, 115, 109, 13, 0, 1, 0, 0, 25, 22, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 45, 101, 110, 99, 111, 100, 105, 110, 103, 4, 0, 7, 211, 9, 1, 65, 2, 1, 65, 19, 1, 66, 21, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 1, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 1, 1, 104, 0, 1, 114, 2, 3, 114, 101, 113, 2, 3, 116, 97, 103, 115, 4, 0, 6, 116, 97, 103, 103, 101, 100, 3, 0, 3, 1, 105, 1, 1, 114, 2, 4, 114, 101, 115, 112, 5, 4, 110, 111, 116, 101, 115, 4, 0, 7, 119, 114, 97, 112, 112, 101, 100, 3, 0, 6, 1, 105, 0, 1, 64, 1, 4, 112, 97, 116, 104, 115, 0, 8, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 113, 117, 101, 115, 116, 1, 9, 1, 64, 1, 4, 115, 101, 108, 102, 2, 0, 115, 4, 0, 20, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 113, 117, 101, 115, 116, 46, 112, 97, 116, 104, 1, 10, 1, 112, 125, 1, 64, 2, 6, 115, 116, 97, 116, 117, 115, 123, 4, 98, 111, 100, 121, 11, 0, 5, 4, 0, 21, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 114, 101, 115, 112, 111, 110, 115, 101, 1, 12, 1, 104, 1, 1, 64, 1, 4, 115, 101, 108, 102, 13, 0, 123, 4, 0, 23, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 115, 116, 97, 116, 117, 115, 1, 14, 1, 64, 1, 4, 115, 101, 108, 102, 13, 0, 11, 4, 0, 21, 91, 109, 101, 116, 104, 111, 100, 93, 114, 101, 115, 112, 111, 110, 115, 101, 46, 98, 111, 100, 121, 1, 15, 3, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 116, 121, 112, 101, 115, 5, 0, 2, 3, 0, 0, 7, 114, 101, 113, 117, 101, 115, 116, 2, 3, 0, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 2, 3, 0, 0, 6, 116, 97, 103, 103, 101, 100, 2, 3, 0, 0, 7, 119, 114, 97, 112, 112, 101, 100, 1, 66, 16, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 2, 3, 2, 1, 3, 4, 0, 6, 116, 97, 103, 103, 101, 100, 3, 0, 4, 2, 3, 2, 1, 4, 4, 0, 7, 119, 114, 97, 112, 112, 101, 100, 3, 0, 6, 1, 105, 1, 1, 105, 3, 1, 64, 1, 1, 114, 8, 0, 9, 4, 0, 4, 115, 101, 110, 100, 1, 10, 1, 64, 1, 1, 116, 5, 0, 115, 4, 0, 7, 105, 110, 115, 112, 101, 99, 116, 1, 11, 1, 64, 1, 6, 115, 116, 97, 116, 117, 115, 123, 0, 7, 4, 0, 4, 119, 114, 97, 112, 1, 12, 3, 0, 21, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 111, 117, 116, 103, 111, 105, 110, 103, 5, 5, 1, 66, 4, 2, 3, 2, 1, 3, 4, 0, 6, 116, 97, 103, 103, 101, 100, 3, 0, 0, 1, 64, 1, 1, 116, 1, 0, 115, 4, 0, 5, 114, 101, 108, 97, 121, 1, 2, 3, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 114, 101, 108, 97, 121, 5, 6, 1, 66, 10, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 1, 1, 104, 0, 1, 64, 1, 4, 115, 101, 108, 102, 1, 0, 127, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 114, 101, 97, 100, 121, 1, 2, 1, 64, 1, 4, 115, 101, 108, 102, 1, 1, 0, 4, 0, 22, 91, 109, 101, 116, 104, 111, 100, 93, 112, 111, 108, 108, 97, 98, 108, 101, 46, 98, 108, 111, 99, 107, 1, 3, 1, 112, 1, 1, 112, 121, 1, 64, 1, 2, 105, 110, 4, 0, 5, 4, 0, 4, 112, 111, 108, 108, 1, 6, 3, 0, 19, 119, 97, 115, 105, 58, 105, 111, 47, 112, 111, 108, 108, 64, 48, 46, 50, 46, 49, 50, 5, 7, 2, 3, 0, 3, 8, 112, 111, 108, 108, 97, 98, 108, 101, 1, 66, 15, 2, 3, 2, 1, 8, 4, 0, 8, 112, 111, 108, 108, 97, 98, 108, 101, 3, 0, 0, 1, 119, 4, 0, 7, 105, 110, 115, 116, 97, 110, 116, 3, 0, 2, 1, 119, 4, 0, 8, 100, 117, 114, 97, 116, 105, 111, 110, 3, 0, 4, 1, 64, 0, 0, 3, 4, 0, 3, 110, 111, 119, 1, 6, 1, 64, 0, 0, 5, 4, 0, 10, 114, 101, 115, 111, 108, 117, 116, 105, 111, 110, 1, 7, 1, 105, 1, 1, 64, 1, 4, 119, 104, 101, 110, 3, 0, 8, 4, 0, 17, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 105, 110, 115, 116, 97, 110, 116, 1, 9, 1, 64, 1, 4, 119, 104, 101, 110, 5, 0, 8, 4, 0, 18, 115, 117, 98, 115, 99, 114, 105, 98, 101, 45, 100, 117, 114, 97, 116, 105, 111, 110, 1, 10, 3, 0, 34, 119, 97, 115, 105, 58, 99, 108, 111, 99, 107, 115, 47, 109, 111, 110, 111, 116, 111, 110, 105, 99, 45, 99, 108, 111, 99, 107, 64, 48, 46, 50, 46, 49, 50, 5, 9, 1, 66, 17, 2, 3, 2, 1, 1, 4, 0, 7, 114, 101, 113, 117, 101, 115, 116, 3, 0, 0, 2, 3, 2, 1, 2, 4, 0, 8, 114, 101, 115, 112, 111, 110, 115, 101, 3, 0, 2, 4, 0, 7, 115, 101, 115, 115, 105, 111, 110, 3, 1, 1, 105, 4, 1, 64, 0, 0, 5, 4, 0, 20, 91, 99, 111, 110, 115, 116, 114, 117, 99, 116, 111, 114, 93, 115, 101, 115, 115, 105, 111, 110, 1, 6, 1, 104, 4, 1, 64, 2, 4, 115, 101, 108, 102, 7, 6, 112, 114, 101, 102, 105, 120, 115, 0, 115, 4, 0, 24, 91, 109, 101, 116, 104, 111, 100, 93, 115, 101, 115, 115, 105, 111, 110, 46, 100, 101, 115, 99, 114, 105, 98, 101, 1, 8, 1, 105, 1, 1, 105, 3, 1, 64, 2, 1, 115, 7, 1, 114, 9, 0, 10, 4, 0, 7, 114, 101, 99, 101, 105, 118, 101, 1, 11, 1, 64, 0, 0, 121, 4, 0, 7, 100, 114, 111, 112, 112, 101, 100, 1, 12, 4, 0, 20, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 104, 97, 110, 100, 108, 101, 114, 5, 10, 1, 66, 4, 2, 3, 2, 1, 3, 4, 0, 6, 116, 97, 103, 103, 101, 100, 3, 0, 0, 1, 64, 1, 1, 116, 1, 0, 115, 4, 0, 5, 114, 101, 108, 97, 121, 1, 2, 4, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 114, 101, 108, 97, 121, 5, 11, 4, 0, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 103, 117, 101, 115, 116, 4, 0, 11, 11, 1, 0, 5, 103, 117, 101, 115, 116, 3, 0, 0, 0, 47, 9, 112, 114, 111, 100, 117, 99, 101, 114, 115, 1, 12, 112, 114, 111, 99, 101, 115, 115, 101, 100, 45, 98, 121, 1, 13, 119, 105, 116, 45, 99, 111, 109, 112, 111, 110, 101, 110, 116, 7, 48, 46, 50, 54, 51, 46, 48, 3, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 116, 121, 112, 101, 115, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 116, 121, 112, 101, 115, 21, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 111, 117, 116, 103, 111, 105, 110, 103, 21, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 111, 117, 116, 103, 111, 105, 110, 103, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 114, 101, 108, 97, 121, 18, 101, 120, 97, 109, 112, 108, 101, 58, 118, 105, 114, 116, 47, 114, 101, 108, 97, 121];
