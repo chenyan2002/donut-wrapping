@@ -10,8 +10,8 @@ Companion to `docs/design.md`. Section numbers (§) refer to the design doc.
 | 1 | `import_module_prefix` option | wit-bindgen, branch `donut` | done, committed |
 | 2 | `DonutPlan` + `donut!` | this repo: `crates/`, `examples/http` | done, uncommitted |
 | 3 | wit-component donut mode + `--donut-guest` | wasm-tools, branch `donut` | done, committed; fixtures pending |
-| 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | wasip2 guests done (uncommitted); runtime tests **next** |
-| 5 | `forward:` and conversions (§6) | this repo | later |
+| 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | done (uncommitted); CI pending |
+| 5 | `forward:` and conversions (§6) | this repo | record-donut spike done (uncommitted); generated wrappers later |
 | 6 | upstream PRs, wasm-component-ld integration | upstream | later |
 | 7 | hole mode + wac plugging, p3, other languages | — | later |
 
@@ -150,17 +150,52 @@ Remaining:
      donut both on `wasm32-wasip2`, and `run.sh` also checks that the guest's
      `eprintln!` reaches the host. `out/donut-unknown.wasm` is the
      `wasm32-unknown-unknown` pair. Both pass on Wasmtime 49.
-2. **Runtime tests** as `cargo test`, using Wasmtime ≥ 49 as a library:
-   * `serve → receive → send`, and exactly-once dtors for virtual and guest-defined
-     resources (covered by `examples/http` today, through shell scripts);
-   * strings and lists;
-   * a borrow inside a record;
-   * an interface on both sides of the guest;
-   * the guest's WASI passthrough (e.g. `println!` from a wasip2 guest);
-   * a clear trap when calling `guest::…` before linking.
-3. CI.
+2. **Runtime tests. Done.** `cargo test -p donut-tests` (or `cargo test --workspace`)
+   builds each example with its `build.sh` (into `target/donut-examples`) and runs it
+   on Wasmtime 49.0.2 as a library:
+
+   | Test | Example | What it checks |
+   |---|---|---|
+   | `http_wasip2` | `examples/http` (wasip2 pair) | re-entrance, exactly-once dtors (virtual and guest-defined), strings/lists, the guest's `std` WASI passthrough (stderr) |
+   | `http_unknown_unknown` | `examples/http` (`wasm32-unknown-unknown` pair) | the same without WASI |
+   | `shapes_records_and_middleware` | `examples/shapes` | a borrow inside a record (both directions), an owned handle inside a returned record and its dtor, `handler` imported *and* exported by the guest, re-lending a borrow the guest received |
+   | `guest_start_calls_virtual_function` | `examples/shapes` + `init-guests/tick.wat` | a guest's core start function calling a virtual function during instantiation (phase-1 fixup done first) |
+   | `guest_start_calling_back_into_guest_traps` | `examples/shapes` + `init-guests/tick-reentrant.wat` | ... that calls back into the guest: traps with `uninitialized element` at `guest-export-ticks` |
+   | `fastly_guest` | `examples/fastly` + proxy-component's `tests/rust.wasm` | a real Fastly Compute guest (60 virtual functions, a versioned package, resource aliases, resources in `result`s); the host calls match proxy-component's recorded trace; 200 and 404 responses; the guest's stdout via WASI passthrough. Skipped if the guest isn't found (`GUEST`) |
+
+   The WAT guests exist because Rust components can't run code at instantiation.
+   Tools added: `cargo run -p donut-plan --example expand` prints a formatted
+   expansion, and `tools/stubs.py` turns it into `unimplemented!()` trait impls.
+3. **CI.** Blocked on the local `[patch]` paths. Use git dependencies on the fork
+   branches, or wait for upstream releases.
 
 ## Phase 5: `forward:` and conversions (§6)
+
+**Record-donut spike: done** (`examples/record`, test
+`crates/donut-tests/tests/record.rs`). proxy-component's record mode works as a
+single donut with the same world as the app it wraps (`import kv; export app`):
+* the app's `kv` is virtualized, and the virtual `store` wraps a host `store` (owned,
+  or lent for one call through `ManuallyDrop`);
+* `app` is exported publicly and forwards to the app's `app`, and the donut's
+  `session` wraps the app's `session`;
+* every call in both directions is printed.
+
+On a wasmtime host `kv`, the bare app and the recorder give identical results and
+make identical host calls. The recorder's log has every export and import in
+order, interleaved on the same stack. Compared with proxy-component, it needs no
+imports/exports proxy pair, no `proxy:conversion` interface, no separate recorder
+component, and one fewer hop per call.
+
+It needed two changes:
+* DonutPlan exports a **renamed copy** (`virtual-<ns>:…`) of a virtualized
+  interface when the donut's own world imports or exports it (design §4 step 2).
+* The manifest's virtual list is now (guest import → donut export) pairs, in
+  donut-plan and in the wasm-tools `donut` working tree (uncommitted).
+
+The wrappers (`VStore`, `Session`) and the `lend` helper are hand-written in the
+spike. They're exactly what generated `forward:` code should produce.
+
+Remaining:
 
 * Generate `VirtR` wrappers, `RHooks` default methods, and deep `ToHost`/`FromHost`
   conversions, both between World A and World B and between host and virtual types.
@@ -193,7 +228,9 @@ Remaining:
 ## Risks to watch
 
 * **Guest `_initialize` calling virtual functions** relies on fixup phase 1 having run
-  first (§5.1). Neither example crate has an `_initialize`, so this is untested.
+  first (§5.1). It is covered by a WAT guest's start function
+  (`guest_start_calls_virtual_function`), since Rust components have no
+  `_initialize`.
 * **Dead-code warnings and doc noise** from passthrough bindings in World A.
 * **Two `_rt` modules** (crate root and `guest::_rt`). Expected and harmless; pinned by
   the snapshot.

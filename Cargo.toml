@@ -2,8 +2,15 @@
 members = [
   "crates/donut-plan",
   "crates/donut",
+  "crates/donut-tests",
   "examples/http/guest",
   "examples/http/server",
+  "examples/fastly/host",
+  "examples/shapes/guest",
+  "examples/shapes/donut",
+  "examples/shapes/init-donut",
+  "examples/record/app",
+  "examples/record/recorder",
 ]
 exclude = ["spike"]
 resolver = "2"

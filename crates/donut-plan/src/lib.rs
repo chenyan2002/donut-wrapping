@@ -54,8 +54,12 @@ pub struct Plan {
     pub world_a: WorldId,
     /// World B: the guest's exports, as imports.
     pub world_b: WorldId,
-    /// Virtualized guest imports (exported by World A).
+    /// Virtualized guest imports.
     pub virtualized: Vec<InterfaceId>,
+    /// For each of `virtualized`, the interface World A exports to implement
+    /// it: the same interface, or a renamed copy (`virtual-<namespace>:…`) when
+    /// the donut's own world also imports or exports it.
+    pub virtual_exports: Vec<InterfaceId>,
     /// Passthrough guest imports (imported by World A).
     pub passthrough: Vec<InterfaceId>,
     /// The guest's exported interfaces (imported by World B).
@@ -133,6 +137,59 @@ impl Plan {
             }
         }
 
+        // 2b. If the donut's own world also imports or exports a virtualized
+        // interface (e.g. a recording donut whose world is the guest's), World
+        // A can't export that interface for the guest as well: the donut's own
+        // exports would then bind to the virtual copy rather than the host's,
+        // since wit-bindgen and wit-component bind an export's dependencies to
+        // exports. So export a renamed copy of its package instead. That's the
+        // same reason proxy-component uses `wrapped-` names.
+        let w = &resolve.worlds[outer];
+        let mut virtual_exports = virtualized.clone();
+        let conflicting = virtualized
+            .iter()
+            .filter(|id| {
+                let key = WorldKey::Interface(**id);
+                w.imports.contains_key(&key) || w.exports.contains_key(&key)
+            })
+            .map(|id| resolve.interfaces[*id].package.unwrap())
+            .collect::<BTreeSet<_>>();
+        for pkg in conflicting {
+            let mut copy = resolve.clone();
+            let old = copy.packages[pkg].name.clone();
+            let mut name = old.clone();
+            name.namespace = format!("virtual-{}", name.namespace);
+            copy.package_names.shift_remove(&old);
+            copy.packages[pkg].name = name.clone();
+            copy.package_names.insert(name.clone(), pkg);
+            resolve
+                .merge(copy)
+                .with_context(|| format!("copying `{old}` as `{name}`"))?;
+            let new_pkg = resolve.package_names[&name];
+            for (i, id) in virtualized.iter().enumerate() {
+                if resolve.interfaces[*id].package != Some(pkg) {
+                    continue;
+                }
+                // The copy's same-package dependencies are copies too, so they
+                // must be virtualized as well.
+                for dep in resolve.interface_direct_deps(*id) {
+                    if resolve.interfaces[dep].package == Some(pkg) && !virtual_set.contains(&dep) {
+                        bail!(
+                            "virtualized `{}` uses `{}` from the same package, which must \
+                             then be virtualized too (the donut's own world uses `{}`, so \
+                             the guest's copy is a renamed package)",
+                            resolve.id_of(*id).unwrap(),
+                            resolve.id_of(dep).unwrap(),
+                            resolve.id_of(*id).unwrap(),
+                        );
+                    }
+                }
+                let iface = resolve.interfaces[*id].name.clone().unwrap();
+                virtual_exports[i] = resolve.packages[new_pkg].interfaces[&iface];
+            }
+        }
+
+        let g = &resolve.worlds[guest];
         let mut guest_exports = Vec::new();
         for (key, item) in g.exports.iter() {
             let name = resolve.name_world_key(key);
@@ -156,10 +213,8 @@ impl Plan {
                 writeln!(wit, "  import {};", resolve.id_of(*id).unwrap())?;
             }
         }
-        for id in virtualized.iter() {
-            if !w.exports.contains_key(&WorldKey::Interface(*id)) {
-                writeln!(wit, "  export {};", resolve.id_of(*id).unwrap())?;
-            }
+        for id in virtual_exports.iter() {
+            writeln!(wit, "  export {};", resolve.id_of(*id).unwrap())?;
         }
         writeln!(wit, "}}\n\nworld donut-b {{")?;
         for id in guest_exports.iter() {
@@ -178,6 +233,7 @@ impl Plan {
             world_a,
             world_b,
             virtualized,
+            virtual_exports,
             passthrough,
             guest_exports,
         })
@@ -191,7 +247,10 @@ impl Plan {
         let names = self
             .virtualized
             .iter()
-            .map(|id| self.resolve.id_of(*id).unwrap())
+            .zip(self.virtual_exports.iter())
+            .map(|(id, export)| {
+                (self.resolve.id_of(*id).unwrap(), self.resolve.id_of(*export).unwrap())
+            })
             .collect::<Vec<_>>();
         let manifest = encode_manifest(&self.resolve, self.guest, &names)?;
 
@@ -224,7 +283,12 @@ impl Plan {
     fn generate_world_b(&self, opts: &Opts) -> Result<String> {
         let mut resolve = self.resolve.clone();
         let guest_exports = self.guest_exports.iter().copied().collect::<HashSet<_>>();
-        let virtualized = self.virtualized.iter().copied().collect::<HashSet<_>>();
+        let virtual_export = self
+            .virtualized
+            .iter()
+            .copied()
+            .zip(self.virtual_exports.iter().copied())
+            .collect::<std::collections::HashMap<_, _>>();
         let mut with = Vec::new();
         let deps = resolve.worlds[self.world_b]
             .imports
@@ -237,13 +301,13 @@ impl Plan {
             })
             .collect::<Vec<_>>();
         for (key, id) in deps {
-            if virtualized.contains(&id) {
+            if let Some(export) = virtual_export.get(&id) {
                 // A virtualized dependency: keep its non-resource types (they're
                 // regenerated as outbound views), drop its functions (they'd
                 // collide with World A's export-side resource methods), and map
                 // its resources to World A's export-side types.
                 resolve.interfaces[id].functions.clear();
-                let module = module_path(&resolve, id, true);
+                let module = module_path(&resolve, *export, true);
                 for (name, ty) in resolve.interfaces[id].types.iter() {
                     if matches!(resolve.types[*ty].kind, TypeDefKind::Resource) {
                         with.push((

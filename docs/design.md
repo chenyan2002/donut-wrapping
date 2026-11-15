@@ -7,8 +7,10 @@ with `docs/p2-donut-wrapping-astra.md` and reviewing
 * `DonutPlan` and the `donut!` macro (§4, this repo);
 * wit-component's donut mode and `wasm-tools component new --donut-guest` (§5).
 
-`examples/http` builds with `donut!` and runs on Wasmtime 49. `spike/` is the
-hand-assembled golden output for §5.1. `docs/plan.md` has the status, the branches
+The examples (`examples/http`, `examples/shapes`, and `examples/fastly`, a mock
+Fastly host around a real Fastly Compute guest) build with `donut!` and run on
+Wasmtime 49 in `cargo test -p donut-tests`. `spike/` is the hand-assembled golden
+output for §5.1. `docs/plan.md` has the status, the branches
 and the follow-ups.
 Scope: component model p2 only (sync functions, resources; no `async`, `stream`, `future`)
 Reference: [Explainer § Virtualization and "donut wrapping"](https://github.com/WebAssembly/component-model/blob/new-explainer/design/mvp/Explainer.md#virtualization-and-donut-wrapping)
@@ -259,6 +261,21 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
    `W.imports ∪ passthrough(G) ∪ {import X | X needed by a virtual interface's use-closure}`,
    `W.exports ∪ {export v | v ∈ virtual}`. A world may both import and export the same
    interface (needed when the donut wraps the real `example:http/types`).
+   **If `W` itself imports or exports a virtualized interface**, World A exports a
+   *renamed copy* of it for the guest, e.g. `virtual-example:rec/kv`. This happens,
+   for instance, in a recording donut whose world is the guest's. Without the copy,
+   `W`'s own exports would bind to the virtual interface rather than the host's:
+   wit-bindgen (`generate_nominal_type_ids`) and wit-component (`exports_used`) both
+   bind an export's dependencies to an export of the same interface. This is the
+   same reason proxy-component uses `wrapped-` names.
+   * DonutPlan makes the copy by merging a copy of the `Resolve` in which the
+     package is renamed.
+   * The copy's same-package dependencies are copies too, so they must be
+     virtualized as well.
+   * The manifest maps each guest import to the donut export that implements it.
+   * Interfaces without a collision keep their names, so their paths stay
+     `exports::<ns>::…`.
+
    As implemented, World A and World B are written as WIT in a synthetic package and
    pushed into the `Resolve`, so wit-parser elaborates their dependencies:
    ```wit
@@ -341,14 +358,16 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
    **not** start with `component-type`: wit-component merges every such section into the
    world (`metadata.rs:237`). Contents, as implemented by
    `wit_component::donut::encode_manifest`
-   (`u8 version | vec<u8> G | vec<string> virtualized`):
+   (`u8 version | vec<u8> G | vec<(string, string)> virtualized`):
    * a version byte (`0`);
    * the guest world `G`, in wit-component's metadata encoding (`metadata::encode`).
      The encoder uses it to produce the guest's component type, rebuild World B, and
      check an embedded guest against it. Hole mode needs it because there is no guest
      binary;
-   * the list of virtualized guest imports. It must be explicit: when the donut wraps
-     the real interface, World A both imports and exports it.
+   * the virtualized guest imports, each as a pair: the guest's import name and the
+     name of the World-A export that implements it (the same name, or the renamed
+     copy from step 2). It must be explicit: when the donut wraps the real
+     interface, World A both imports it and exports the copy.
 
    Everything else is derived by convention, so it isn't serialized:
    * passthrough = the remaining guest imports, bound to World-A imports by
@@ -538,8 +557,10 @@ generator also covers the World-A ↔ World-B conversions from §4 step 3.
 * **Lending:** the donut can lend `borrow<R>` to the guest only for handles it *owns*
   (`&Request`). A `RequestBorrow<'_>` received from the guest holds a rep, not a handle,
   so it can't be passed back to a guest export.
-* **Calls before linking:** calling `guest::…` from the donut's `_initialize` traps
-  (the slot isn't patched yet). Optional nicety: phase-2 fixup calls an exported
+* **Calls before linking:** calling `guest::…` from the donut's `_initialize`, or from
+  a virtual function the guest calls during its own instantiation, traps with
+  `uninitialized element` (the slot isn't patched yet; tested by
+  `guest_start_calling_back_into_guest_traps`). Optional nicety: phase-2 fixup calls an exported
   `__donut_linked()` that sets a static flag, and the generated wrappers check it and
   panic with a clear message.
 * **Only the guest can't see through the abstraction.** It never gets
