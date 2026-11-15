@@ -11,6 +11,7 @@ members = [
   "examples/shapes/init-donut",
   "examples/record/app",
   "examples/record/recorder",
+  "examples/record/forwarder",
 ]
 exclude = ["spike"]
 resolver = "2"

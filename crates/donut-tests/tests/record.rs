@@ -132,3 +132,43 @@ fn recorder_is_transparent_and_records_both_directions() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// The same recording donut with generated forwarding (`forward:`): just as
+/// transparent, and its hooks see every call and drop.
+#[test]
+fn generated_forwarding_is_transparent_and_hooks_see_every_call() -> anyhow::Result<()> {
+    let dir = build("record")?;
+    let w = |e: wasmtime::Error| anyhow::anyhow!("{e:?}");
+    let bare = drive(&dir.join("out/app.wasm")).map_err(w)?;
+    let wrapped = drive(&dir.join("out/forwarder.wasm")).map_err(w)?;
+    assert_eq!(wrapped.results, bare.results);
+    assert_eq!(wrapped.host_calls, bare.host_calls);
+    assert_eq!(
+        wrapped.stdout.lines().collect::<Vec<_>>(),
+        [
+            "record: Export example:rec/app.run[<store>]",
+            "record: Import example:rec/kv.[method]store.set[\"visits\", \"1\"]",
+            "record: Import example:rec/kv.[method]store.set -> ()",
+            "record: Import example:rec/kv.open[\"cache\"]",
+            "record: Import example:rec/kv.open -> <store>",
+            "record: Import example:rec/kv.[method]store.set[\"k\", \"v\"]",
+            "record: Import example:rec/kv.[method]store.set -> ()",
+            "record: Import example:rec/kv.[method]store.get[\"visits\"]",
+            "record: Import example:rec/kv.[method]store.get -> Some(\"1\")",
+            "record: Import example:rec/kv.[method]store.get[\"k\"]",
+            "record: Import example:rec/kv.[method]store.get -> Some(\"v\")",
+            // The app dropped its `cache` store: the virtual wrapper and, with
+            // it, the host's store.
+            "record: Import example:rec/kv.store dropped",
+            "record: Export example:rec/app.run -> \"visits=Some(\\\"1\\\") cache=Some(\\\"v\\\")\"",
+            "record: Export example:rec/app.[constructor]session[\"ann\"]",
+            "record: Export example:rec/app.[constructor]session -> <session>",
+            "record: Export example:rec/app.[method]session.greet[<store>]",
+            "record: Import example:rec/kv.[method]store.get[\"visits\"]",
+            "record: Import example:rec/kv.[method]store.get -> Some(\"1\")",
+            "record: Export example:rec/app.[method]session.greet -> \"hello ann (visits=Some(\\\"1\\\"))\"",
+            "record: Export example:rec/app.session dropped",
+        ]
+    );
+    Ok(())
+}

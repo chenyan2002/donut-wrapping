@@ -521,6 +521,19 @@ pub trait RHooks {                                         // user may override 
 `forward:` is optional. Without it the user implements the `Guest*` traits directly, as in
 the Explainer, where `$Main` implements `request` on top of sockets.
 
+**As implemented (first cut):** `forward: [..]` plus `hooks: T`. A listed guest
+import is virtualized and forwarded to the host's import of it. A listed interface
+exported by both the donut's world and the guest is forwarded to the guest. Both
+directions get generated resource wrappers (host- or guest-backed, with `lend`
+for host borrows). The `forward::Hooks` trait observes every call and drop.
+Conversions are structure-directed, and only for values containing forwarded
+resources. Resource-free types are shared, because `merge_structurally_equal_types`
+is on for World A. Import calls go through a generated `forward::Arg` trait
+instead of re-encoding wit-bindgen's parameter conventions.
+`examples/record/forwarder` is the recorder written this way. Not yet: records or
+variants containing forwarded resources, non-top-level borrows, and per-method
+interception (`RHooks`).
+
 **Prior art:** [proxy-component](https://github.com/chenyan2002/proxy-component)
 (`src/traits/proxy.rs`) already generates this kind of conversion as a `ToProxy` trait,
 including resources. Owned import → `Export::new(inner)`, owned export → `into_inner()`,

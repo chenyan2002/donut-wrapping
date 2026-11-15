@@ -1192,6 +1192,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "record-forwarder"
+version = "0.1.0"
+dependencies = [
+ "donut",
+ "wit-bindgen",
+]
+
+[[package]]
 name = "record-recorder"
 version = "0.1.0"
 dependencies = [

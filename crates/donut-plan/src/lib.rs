@@ -23,6 +23,8 @@ use std::fmt::Write;
 use wit_bindgen_core::{Files, WorldGenerator, name_package_module};
 use wit_bindgen_rust::{Opts, WithOption, to_rust_ident};
 use wit_component::donut::{GUEST_EXPORT_MODULE_PREFIX, MANIFEST_SECTION_NAME, encode_manifest};
+mod forward;
+
 use wit_parser::{
     FunctionKind, InterfaceId, LiveTypes, PackageId, Resolve, TypeDefKind, TypeOwner, WorldId,
     WorldItem, WorldKey,
@@ -38,6 +40,13 @@ pub struct Config {
     /// Guest imports the donut implements, e.g. `example:http/types`. Every
     /// other guest import is passed through from the donut's imports.
     pub virtualize: Vec<String>,
+    /// Interfaces to forward (design §6). A guest import is virtualized and
+    /// forwarded to the host's import of it. An export of both the donut's
+    /// world and the guest is forwarded to the guest's. Requires `hooks`.
+    pub forward: Vec<String>,
+    /// The Rust type (at the crate root) that implements `forward::Hooks` and
+    /// receives the generated forwarding impls.
+    pub hooks: Option<String>,
     /// wit-bindgen options for World A. `generate_all` is always set, since
     /// passthrough imports need bindings.
     pub opts: Opts,
@@ -64,6 +73,10 @@ pub struct Plan {
     pub passthrough: Vec<InterfaceId>,
     /// The guest's exported interfaces (imported by World B).
     pub guest_exports: Vec<InterfaceId>,
+    /// Forwarded virtual interfaces: (World A's virtual copy, the host's).
+    pub forward_virtual: Vec<(InterfaceId, InterfaceId)>,
+    /// Forwarded exports (of both World A and the guest).
+    pub forward_exports: Vec<InterfaceId>,
 }
 
 /// Generated Rust source plus the manifest it embeds.
@@ -88,7 +101,17 @@ impl Plan {
         reject_unsupported(&resolve, guest)?;
 
         // 1. Classify the guest's imports.
-        let wanted = config.virtualize.iter().collect::<HashSet<_>>();
+        let guest_imports = g
+            .imports
+            .keys()
+            .map(|k| resolve.name_world_key(k))
+            .collect::<HashSet<_>>();
+        let forwarded = config.forward.iter().collect::<HashSet<_>>();
+        let wanted = config
+            .virtualize
+            .iter()
+            .chain(config.forward.iter().filter(|f| guest_imports.contains(*f)))
+            .collect::<HashSet<_>>();
         let mut virtualized = Vec::new();
         let mut passthrough = Vec::new();
         for (key, item) in g.imports.iter() {
@@ -146,11 +169,15 @@ impl Plan {
         // same reason proxy-component uses `wrapped-` names.
         let w = &resolve.worlds[outer];
         let mut virtual_exports = virtualized.clone();
+        // Forwarded virtual interfaces always collide: World A imports the
+        // host's to forward to it.
         let conflicting = virtualized
             .iter()
             .filter(|id| {
                 let key = WorldKey::Interface(**id);
-                w.imports.contains_key(&key) || w.exports.contains_key(&key)
+                w.imports.contains_key(&key)
+                    || w.exports.contains_key(&key)
+                    || forwarded.contains(&resolve.id_of(**id).unwrap())
             })
             .map(|id| resolve.interfaces[*id].package.unwrap())
             .collect::<BTreeSet<_>>();
@@ -213,6 +240,39 @@ impl Plan {
                 writeln!(wit, "  import {};", resolve.id_of(*id).unwrap())?;
             }
         }
+        // Forwarded virtual interfaces forward to the host's.
+        let mut forward_virtual = Vec::new();
+        for (id, copy) in virtualized.iter().zip(virtual_exports.iter()) {
+            if forwarded.contains(&resolve.id_of(*id).unwrap()) {
+                if !w.imports.contains_key(&WorldKey::Interface(*id)) {
+                    writeln!(wit, "  import {};", resolve.id_of(*id).unwrap())?;
+                }
+                forward_virtual.push((*copy, *id));
+            }
+        }
+        // Forwarded exports: exported by both the donut's world and the guest.
+        let mut forward_exports = Vec::new();
+        for name in config.forward.iter() {
+            if guest_imports.contains(name) {
+                continue;
+            }
+            let id = guest_exports
+                .iter()
+                .find(|id| resolve.id_of(**id).as_ref() == Some(name))
+                .filter(|id| w.exports.contains_key(&WorldKey::Interface(**id)));
+            match id {
+                Some(id) => forward_exports.push(*id),
+                None => bail!(
+                    "`{name}` in `forward` is neither a guest import nor an interface \
+                     exported by both `{}` and `{}`",
+                    config.world,
+                    config.guest
+                ),
+            }
+        }
+        if !config.forward.is_empty() && config.hooks.is_none() {
+            bail!("`forward` needs `hooks`: the type that implements `forward::Hooks`");
+        }
         for id in virtual_exports.iter() {
             writeln!(wit, "  export {};", resolve.id_of(*id).unwrap())?;
         }
@@ -236,12 +296,28 @@ impl Plan {
             virtual_exports,
             passthrough,
             guest_exports,
+            forward_virtual,
+            forward_exports,
         })
     }
 
     /// Generates the Rust source for World A, `mod guest` (World B), and the
     /// manifest static.
     pub fn generate(&self, opts: &Opts) -> Result<Output> {
+        self.generate_with(opts, None)
+    }
+
+    /// Like `generate`, plus forwarding impls for `hooks` if anything is
+    /// forwarded.
+    pub fn generate_with(&self, opts: &Opts, hooks: Option<&str>) -> Result<Output> {
+        let forwarding = !self.forward_virtual.is_empty() || !self.forward_exports.is_empty();
+        let mut opts = opts.clone();
+        if forwarding {
+            // Host-side and virtual copies of resource-free types become the
+            // same Rust type, so forwarding passes them through unchanged.
+            opts.merge_structurally_equal_types = Some(Some(true));
+        }
+        let opts = &opts;
         let world_a = self.generate_world_a(opts)?;
         let world_b = self.generate_world_b(opts)?;
         let names = self
@@ -255,6 +331,10 @@ impl Plan {
         let manifest = encode_manifest(&self.resolve, self.guest, &names)?;
 
         let mut source = world_a;
+        if forwarding {
+            let hooks = hooks.ok_or_else(|| anyhow::anyhow!("`forward` needs `hooks`"))?;
+            source.push_str(&forward::generate(self, hooks).context("generating forwarding")?);
+        }
         writeln!(
             source,
             "\n/// Calls into the embedded guest component (its exports).\n\
@@ -342,7 +422,7 @@ impl Plan {
 
 /// Plans and generates in one step.
 pub fn generate(resolve: &Resolve, packages: &[PackageId], config: &Config) -> Result<Output> {
-    Plan::new(resolve, packages, config)?.generate(&config.opts)
+    Plan::new(resolve, packages, config)?.generate_with(&config.opts, config.hooks.as_deref())
 }
 
 fn run(opts: Opts, resolve: &Resolve, world: WorldId) -> Result<String> {

@@ -25,7 +25,9 @@
 //!
 //! Supported options: `path` (a string or a list of strings, relative to the
 //! crate's manifest directory; default `"wit"`), `world`, `guest`,
-//! `virtualize`.
+//! `virtualize`, and for generated forwarding, `forward` (interfaces to
+//! forward: guest imports go to the host, shared exports go to the guest) with
+//! `hooks` (the type that implements `forward::Hooks`).
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
@@ -48,6 +50,8 @@ struct Input {
     world: LitStr,
     guest: LitStr,
     virtualize: Vec<LitStr>,
+    forward: Vec<LitStr>,
+    hooks: Option<syn::Path>,
 }
 
 impl Parse for Input {
@@ -58,6 +62,8 @@ impl Parse for Input {
         let mut world = None;
         let mut guest = None;
         let mut virtualize = None;
+        let mut forward = Vec::new();
+        let mut hooks = None;
         while !content.is_empty() {
             let key: Ident = content.parse()?;
             content.parse::<Token![:]>()?;
@@ -66,12 +72,14 @@ impl Parse for Input {
                 "world" => world = Some(content.parse::<LitStr>()?),
                 "guest" => guest = Some(content.parse::<LitStr>()?),
                 "virtualize" => virtualize = Some(parse_strings(&content)?),
+                "forward" => forward = parse_strings(&content)?,
+                "hooks" => hooks = Some(content.parse::<syn::Path>()?),
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown `donut!` option `{other}`; expected one of \
-                             `path`, `world`, `guest`, `virtualize`"
+                             `path`, `world`, `guest`, `virtualize`, `forward`, `hooks`"
                         ),
                     ));
                 }
@@ -86,7 +94,9 @@ impl Parse for Input {
             paths: paths.unwrap_or_else(|| vec![LitStr::new("wit", Span::call_site())]),
             world: world.ok_or_else(|| missing("world"))?,
             guest: guest.ok_or_else(|| missing("guest"))?,
-            virtualize: virtualize.ok_or_else(|| missing("virtualize"))?,
+            virtualize: virtualize.unwrap_or_default(),
+            forward,
+            hooks,
         })
     }
 }
@@ -124,6 +134,11 @@ fn expand(input: Input) -> syn::Result<TokenStream> {
         world: input.world.value(),
         guest: input.guest.value(),
         virtualize: input.virtualize.iter().map(|s| s.value()).collect(),
+        forward: input.forward.iter().map(|s| s.value()).collect(),
+        hooks: input
+            .hooks
+            .as_ref()
+            .map(|p| quote!(#p).to_string().replace(' ', "")),
         opts: Default::default(),
     };
     let output = donut_plan::generate(&resolve, &packages, &config).map_err(err)?;

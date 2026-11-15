@@ -11,7 +11,7 @@ Companion to `docs/design.md`. Section numbers (§) refer to the design doc.
 | 2 | `DonutPlan` + `donut!` | this repo: `crates/`, `examples/http` | done, uncommitted |
 | 3 | wit-component donut mode + `--donut-guest` | wasm-tools, branch `donut` | done, committed; fixtures pending |
 | 4 | end-to-end tests, `wasm32-wasip2` guests | this repo, wasm-tools | done (uncommitted); CI pending |
-| 5 | `forward:` and conversions (§6) | this repo | record-donut spike done (uncommitted); generated wrappers later |
+| 5 | `forward:` and conversions (§6) | this repo | first cut of generated forwarding done (uncommitted) |
 | 6 | upstream PRs, wasm-component-ld integration | upstream | later |
 | 7 | hole mode + wac plugging, p3, other languages | — | later |
 
@@ -194,6 +194,42 @@ It needed two changes:
 
 The wrappers (`VStore`, `Session`) and the `lend` helper are hand-written in the
 spike. They're exactly what generated `forward:` code should produce.
+
+**Generated forwarding: first cut done** (`crates/donut-plan/src/forward.rs`,
+`examples/record/forwarder`). The recorder becomes a `donut!` call with
+`forward: ["example:rec/kv", "example:rec/app"], hooks: Recorder`, plus three
+logging hooks (`before`, `after`, `dropped`). The test checks it's as transparent
+as the hand-written recorder (same results, same host calls) and that the hooks
+see every call and drop in both directions. Generated pieces:
+* **Forwarded virtual interface** (a guest import, here `kv`):
+  * it's virtualized implicitly, and World A imports the host's copy (so the
+    virtual side is the renamed copy);
+  * each resource gets a wrapper over the host's resource, owned or lent
+    (`ManuallyDrop`), with `lend`;
+  * the trait impls forward to the host.
+* **Forwarded export** (exported by both the donut's world and the guest, here
+  `app`): each resource gets a wrapper over the guest's, and the trait impls
+  forward to the guest.
+* **Hooks:** a `forward::Hooks` trait (`before(call, args)`, `after(call, ret)`,
+  `dropped`), whose defaults make forwarding transparent.
+* **Conversions** are generated from the WIT structure, and only for values that
+  contain forwarded resources: own, borrow, and their `option`/`list`/`result`/
+  tuple containers.
+  * Resource-free values pass through. World A is generated with
+    `merge_structurally_equal_types` when forwarding.
+  * Import calls go through `forward::Arg`, whose impl is picked by type inference
+    (`String → &str`, `Vec<T> → &[T]`, `T → &T`, `T: Clone → T`, `Option` forms).
+    So wit-bindgen's import-parameter rules aren't reproduced.
+  * Trait impl signatures use wit-bindgen's export-side (all-owned) rule.
+
+Not supported yet (rejected with an error):
+* records and variants that contain forwarded resources;
+* borrows of forwarded resources other than top-level parameters;
+* world-level items.
+
+Forwarded exports with records from other interfaces need World B to reuse World
+A's types (see below). Per-method interception (overriding one method's
+behaviour, design §6's `RHooks`) isn't generated yet; hooks only observe.
 
 Remaining:
 
