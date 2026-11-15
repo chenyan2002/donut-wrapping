@@ -119,7 +119,8 @@ examples/http       # §3.1 WIT, guest crate, donut crate (`server`), build.sh, 
     A's import modules.
 * **Manifest:** `wit_component::donut::encode_manifest`, emitted as a
   `#[link_section = "wit-bindgen-donut:v0"]` static.
-* **Tests:** a snapshot of the `examples/http` expansion
+* **Tests:** snapshots of the `examples/virtualize` and `examples/forward`
+  expansions (`tests/snapshots/{virtualize,forward}.rs`)
   (`BLESS=1 cargo test -p donut-plan`), plus two configuration errors.
 * **Checked end to end:** the donut built for both `wasm32-unknown-unknown` and
   `wasm32-wasip2`. In the wasip2 case, std's WASI imports at `@0.2.9` are merged
@@ -248,13 +249,63 @@ call. The generated impls run `before` and `after` around it.
 cover it: a hidden key never reaches the host, and a decorated guest result is
 returned to the host.
 
-Not supported yet (rejected with an error):
-* records and variants that contain forwarded resources;
-* borrows of forwarded resources other than top-level parameters;
-* world-level items.
+**Forwarding gaps: closed** (`examples/forward`; the recorder's full log is
+`examples/forward/recorder.expected`):
+* **World B reuses World A's types** (`Plan::world_b_shared_types`, used both by
+  World B generation and by `forward.rs`). A virtualized dependency's types are
+  shared with World A's copy unless they contain a borrow of a virtual resource.
+  A forwarded export's types are shared unless they contain any handle. So
+  resource-free values need no conversion in any direction.
+* **Records and variants that contain forwarded resources** are converted by
+  generated code, with source and destination type paths per direction (virtual ↔
+  host for forwarded imports, host ↔ guest for forwarded exports). Records and
+  tuples are rebuilt from *places* (`p0.field`), so borrows in them stay borrows
+  of the caller's value.
+* **Borrows nested in records**, including lending a host borrow inside a record
+  to the guest (`summarize(view)`: `let lent0 = …lend(p0.s)` before the call).
 
-Forwarded exports with records from other interfaces need World B to reuse World
-A's types (see below).
+The example covers:
+* a list of owned stores (`open-all`);
+* owned stores in a record (`open-pair`);
+* an owned store in a variant (`find`);
+* a borrow in a record (`dump`);
+* a resource-free record (`entry`);
+* `summarize`, which takes a lent borrow inside a record and returns an app
+  record holding a `kv` record of owned host stores.
+
+The recorder stays transparent, and the interceptor still only changes what it
+overrides.
+
+**Borrows inside containers.** wit-bindgen's `RBorrow<'a>::get(&self)` returns
+`&'a T`, so converting a borrow works wherever the value is rebound:
+* **guest → host** (virtual borrow → host borrow) works anywhere: lists, options,
+  results, variants (`kv.count(list<borrow<store>>, option<borrow<store>>)`);
+* **host → guest, borrows of guest-wrapping resources**, likewise;
+* **host → guest lending** (a host borrow presented to the guest) needs a
+  temporary virtual resource that outlives the call. It's supported at the top
+  level, in records, and directly in `option<borrow<..>>` and
+  `list<borrow<..>>` (temporaries plus a vector of references). The option
+  case is tested by `app.tally`.
+
+Still rejected, with an error (covered by a `donut-plan` test):
+* lending deeper inside containers (e.g. `list<record { borrow<..> }>`);
+* world-level items;
+* a forwarded interface using a resource from a virtualized but unforwarded one.
+
+proxy-component supports guest → host borrows in lists the same way
+(`ToProxy for Vec<T>` plus `get`), but not host → guest lending at all (its
+exports proxy has `&Host → &Wrapped` as `unreachable!()`).
+
+**Upstream wit-bindgen bug** (released 0.63.0 too): a Rust *export* whose
+parameter is `list<borrow<R>>`, with `R` an *imported* resource, doesn't compile.
+The lifting code declares one `let handleN;` slot outside the list loop and
+reassigns it per element while pushing `&handleN` (E0506). It's also wrong in
+principle, since every element would point at one slot. That blocks lending
+inside `list<borrow<..>>` from being exercised. A donut exporting such a
+function would also hit the bug in its own World A bindings. Minimal repro: an
+interface `app { use kv.{store}; tally: func(stores: list<borrow<store>>) -> u32; }`
+in `world w { import kv; export app; }`. Worth filing upstream (or fixing in the
+wit-bindgen checkout).
 
 Remaining:
 

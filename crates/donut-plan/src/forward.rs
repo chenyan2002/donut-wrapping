@@ -21,7 +21,7 @@
 
 use crate::{Plan, camel, module_path};
 use anyhow::{Result, bail};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use wit_bindgen_rust::to_rust_ident;
 use wit_parser::{
@@ -38,14 +38,17 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
             WorldItem::Interface { id, .. } => Some(*id),
             _ => None,
         })
-        .collect::<HashSet<_>>();
+        .collect::<BTreeSet<_>>();
     let mut g = Gen {
         resolve,
         hooks: format!("crate::{hooks}"),
         exported,
-        virt: HashMap::new(),
-        host: HashMap::new(),
-        export_res: HashMap::new(),
+        virt: BTreeMap::new(),
+        host: BTreeMap::new(),
+        export_res: BTreeMap::new(),
+        shared: plan.world_b_shared_types(),
+        v2h_iface: plan.forward_virtual.iter().copied().collect(),
+        virtual_copies: plan.virtual_exports.iter().copied().collect(),
         defaults: Default::default(),
         hook_methods: String::new(),
         out: String::new(),
@@ -88,18 +91,45 @@ struct Gen<'a> {
     resolve: &'a Resolve,
     hooks: String,
     /// Interfaces World A exports (as opposed to imports).
-    exported: HashSet<InterfaceId>,
+    exported: BTreeSet<InterfaceId>,
     /// Virtual (guest-side) resource → (host resource, wrapper name).
-    virt: HashMap<TypeId, (TypeId, String)>,
+    virt: BTreeMap<TypeId, (TypeId, String)>,
     /// Host resource → (virtual resource, wrapper name).
-    host: HashMap<TypeId, (TypeId, String)>,
+    host: BTreeMap<TypeId, (TypeId, String)>,
     /// Resource of a forwarded export → wrapper name.
-    export_res: HashMap<TypeId, String>,
+    export_res: BTreeMap<TypeId, String>,
+    /// Types World B shares with World A, and their paths.
+    shared: BTreeMap<TypeId, String>,
+    /// Forwarded virtual copy → the host's interface.
+    v2h_iface: BTreeMap<InterfaceId, InterfaceId>,
+    /// World A's virtual copies of guest imports.
+    virtual_copies: BTreeSet<InterfaceId>,
     /// Default forwarding functions, by module.
     defaults: indexmap::IndexMap<String, String>,
     /// `Hooks` methods, one per forwarded function.
     hook_methods: String,
     out: String,
+}
+
+/// A conversion direction.
+#[derive(Clone, Copy)]
+enum Conv {
+    /// A virtual (guest-side) argument → the host's, for a forwarded import.
+    VirtToHost,
+    /// The host's result → a virtual one, for a forwarded import.
+    HostToVirt,
+    /// A host-side argument → the guest's, for a forwarded export.
+    HostToGuest,
+    /// The guest's result → a host-side one, for a forwarded export.
+    GuestToHost,
+}
+
+/// Conversion state: statements to run before the call, and whether the value
+/// being converted is rebound (inside a closure or a match arm).
+struct Ctx<'c> {
+    lets: &'c mut String,
+    n: &'c mut usize,
+    bound: bool,
 }
 
 /// Which way a forwarded call goes.
@@ -299,181 +329,271 @@ pub mod forward {
 
     // ---- conversions ------------------------------------------------------
 
-    /// A structure-directed conversion of `e` (of WIT type `ty`), applying
-    /// `leaf` at each handle. Returns `None` if nothing needs converting.
-    fn convert(
-        &self,
-        ty: &Type,
-        e: &str,
-        leaf: &dyn Fn(&Handle, &str) -> Result<Option<String>>,
-    ) -> Result<Option<String>> {
-        let Type::Id(id) = ty else { return Ok(None) };
-        let some = |s: String| Ok(Some(s));
-        match &self.resolve.types[*id].kind {
-            TypeDefKind::Handle(h) => leaf(h, e),
-            TypeDefKind::Type(t) => self.convert(t, e, leaf),
-            TypeDefKind::Option(t) => match self.convert(t, "v", leaf)? {
-                Some(c) => some(format!("{e}.map(|v| {c})")),
-                None => Ok(None),
-            },
-            TypeDefKind::List(t) => match self.convert(t, "v", leaf)? {
-                Some(c) => some(format!("{e}.into_iter().map(|v| {c}).collect::<Vec<_>>()")),
-                None => Ok(None),
-            },
-            TypeDefKind::Result(r) => {
-                let ok = match &r.ok {
-                    Some(t) => self.convert(t, "v", leaf)?,
-                    None => None,
-                };
-                let err = match &r.err {
-                    Some(t) => self.convert(t, "v", leaf)?,
-                    None => None,
-                };
-                if ok.is_none() && err.is_none() {
-                    return Ok(None);
+    /// The same-named type in the interface `map` pairs its owner with (a
+    /// virtual copy → the host's), or `id` itself.
+    fn counterpart(&self, id: TypeId, map: &BTreeMap<InterfaceId, InterfaceId>) -> TypeId {
+        let def = &self.resolve.types[id];
+        if let (TypeOwner::Interface(owner), Some(name)) = (def.owner, &def.name) {
+            if let Some(other) = map.get(&owner) {
+                if let Some(t) = self.resolve.interfaces[*other].types.get(name) {
+                    return *t;
                 }
-                some(format!(
-                    "{e}.map(|v| {}).map_err(|v| {})",
-                    ok.unwrap_or("v".into()),
-                    err.unwrap_or("v".into())
-                ))
+            }
+        }
+        id
+    }
+
+    /// A named type's path in World B (`mod guest`), or World A's if World B
+    /// shares it.
+    fn world_b_path(&self, id: TypeId) -> Result<String> {
+        if let Some(p) = self.shared.get(&id) {
+            return Ok(p.clone());
+        }
+        let owner = self.owner(id)?;
+        Ok(format!(
+            "crate::guest::{}::{}",
+            module_path(self.resolve, owner, false),
+            camel(self.resolve.types[id].name.as_deref().unwrap())
+        ))
+    }
+
+    /// The (source, destination) paths of a named type, for `conv`.
+    fn paths(&self, id: TypeId, conv: Conv) -> Result<(String, String)> {
+        Ok(match conv {
+            Conv::VirtToHost => (
+                self.named_path(id)?,
+                self.named_path(self.counterpart(id, &self.v2h_iface))?,
+            ),
+            Conv::HostToVirt => (
+                self.named_path(self.counterpart(id, &self.v2h_iface))?,
+                self.named_path(id)?,
+            ),
+            Conv::HostToGuest => (self.named_path(id)?, self.world_b_path(id)?),
+            Conv::GuestToHost => (self.world_b_path(id)?, self.named_path(id)?),
+        })
+    }
+
+    /// Converts `e` (of WIT type `ty`) for `conv`, structurally. Returns `None`
+    /// if nothing needs converting. Types without handles never do: they're
+    /// the same Rust type on both sides (merged, or shared with World B).
+    ///
+    /// Records and tuples are rebuilt from *places* (`e.field`), so borrows in
+    /// them stay borrows of the original value. Values in lists, options,
+    /// results, and variants are rebound, so borrows there are rejected
+    /// (`cx.bound`).
+    fn conv(&self, ty: &Type, e: &str, c: Conv, cx: &mut Ctx<'_>) -> Result<Option<String>> {
+        let Type::Id(id) = ty else { return Ok(None) };
+        if !self.any_handle(ty) {
+            return Ok(None);
+        }
+        let mut bound = Ctx { lets: &mut *cx.lets, n: &mut *cx.n, bound: true };
+        Ok(Some(match &self.resolve.types[*id].kind {
+            TypeDefKind::Handle(h) => return self.leaf(h, e, c, cx),
+            TypeDefKind::Type(t) => return self.conv(t, e, c, cx),
+            TypeDefKind::Record(r) => {
+                let (_, dst) = self.paths(*id, c)?;
+                let mut fields = Vec::new();
+                for f in r.fields.iter() {
+                    let name = to_rust_ident(&f.name);
+                    let place = format!("{e}.{name}");
+                    let v = self.conv(&f.ty, &place, c, cx)?.unwrap_or(place);
+                    fields.push(format!("{name}: {v}"));
+                }
+                format!("{dst} {{ {} }}", fields.join(", "))
             }
             TypeDefKind::Tuple(t) => {
                 let mut parts = Vec::new();
-                let mut any = false;
                 for (i, t) in t.types.iter().enumerate() {
-                    match self.convert(t, &format!("t.{i}"), leaf)? {
-                        Some(c) => {
-                            any = true;
-                            parts.push(c);
+                    let place = format!("{e}.{i}");
+                    parts.push(self.conv(t, &place, c, cx)?.unwrap_or(place));
+                }
+                format!("({},)", parts.join(", "))
+            }
+            TypeDefKind::Variant(v) => {
+                let (src, dst) = self.paths(*id, c)?;
+                let mut arms = Vec::new();
+                for case in v.cases.iter() {
+                    let name = camel(&case.name);
+                    match &case.ty {
+                        Some(t) => {
+                            let v = self.conv(t, "v", c, &mut bound)?.unwrap_or("v".into());
+                            arms.push(format!("{src}::{name}(v) => {dst}::{name}({v})"));
                         }
-                        None => parts.push(format!("t.{i}")),
+                        None => arms.push(format!("{src}::{name} => {dst}::{name}")),
                     }
                 }
-                if !any {
-                    return Ok(None);
-                }
-                some(format!("{{ let t = {e}; ({},) }}", parts.join(", ")))
+                format!("match {e} {{ {} }}", arms.join(", "))
             }
-            _ if self.any_handle(ty) => bail!(
-                "forward: records and variants that contain resources aren't supported yet"
-            ),
-            _ => Ok(None),
-        }
-    }
-
-    /// Virtual (guest-side) value → host value, for arguments to the host.
-    fn virt_to_host(&self, ty: &Type, e: &str) -> Result<String> {
-        let leaf = |h: &Handle, e: &str| -> Result<Option<String>> {
-            Ok(match h {
-                Handle::Own(r) => self
-                    .virt
-                    .get(&self.dealias(*r))
-                    .map(|(_, w)| format!("{e}.into_inner::<{w}>().into_host()")),
-                Handle::Borrow(r) => self
-                    .virt
-                    .get(&self.dealias(*r))
-                    .map(|(_, w)| format!("{e}.get::<{w}>().host()")),
-            })
-        };
-        Ok(self.convert(ty, e, &leaf)?.unwrap_or(e.into()))
-    }
-
-    /// Host value → virtual value, for results from the host. `ty` is the
-    /// virtual-side type.
-    fn host_to_virt(&self, ty: &Type, e: &str) -> Result<String> {
-        let leaf = |h: &Handle, e: &str| -> Result<Option<String>> {
-            match h {
-                Handle::Own(r) => {
-                    let r = self.dealias(*r);
-                    Ok(match self.virt.get(&r) {
-                        Some((_, w)) => Some(format!(
-                            "{}::new(crate::forward::{w}::owned({e}))",
-                            self.named_path(r)?
-                        )),
-                        None => None,
+            TypeDefKind::Option(t) | TypeDefKind::List(t)
+                if !cx.bound && self.lent_wrapper(c, t).is_some() =>
+            {
+                // Lending each host borrow: the temporaries must outlive the call.
+                let w = self.lent_wrapper(c, t).unwrap();
+                let n = *cx.n;
+                *cx.n += 1;
+                if matches!(self.resolve.types[*id].kind, TypeDefKind::Option(_)) {
+                    writeln!(cx.lets, "let lent{n} = {e}.map(|h| crate::forward::{w}::lend(h));")?;
+                    format!("lent{n}.as_ref()")
+                } else {
+                    writeln!(
+                        cx.lets,
+                        "let lent{n} = {e}.iter().map(|h| crate::forward::{w}::lend(h)).collect::<Vec<_>>();\n\
+                         let lent{n}_refs = lent{n}.iter().collect::<Vec<_>>();"
+                    )?;
+                    format!("lent{n}_refs")
+                }
+            }
+            TypeDefKind::Option(t) => {
+                let v = self.conv(t, "v", c, &mut bound)?.unwrap_or("v".into());
+                format!("{e}.map(|v| {v})")
+            }
+            TypeDefKind::List(t) => {
+                let v = self.conv(t, "v", c, &mut bound)?.unwrap_or("v".into());
+                format!("{e}.into_iter().map(|v| {v}).collect::<Vec<_>>()")
+            }
+            TypeDefKind::Result(r) => {
+                let mut side = |t: &Option<Type>| -> Result<String> {
+                    Ok(match t {
+                        Some(t) => self.conv(t, "v", c, &mut bound)?.unwrap_or("v".into()),
+                        None => "v".into(),
                     })
-                }
-                Handle::Borrow(_) => Ok(None),
+                };
+                let ok = side(&r.ok)?;
+                let err = side(&r.err)?;
+                format!("{e}.map(|v| {ok}).map_err(|v| {err})")
             }
-        };
-        Ok(self.convert(ty, e, &leaf)?.unwrap_or(e.into()))
+            _ => bail!("forward: this kind of type isn't supported yet"),
+        }))
     }
 
-    /// Host-side value → guest-side value, for arguments to the guest.
-    /// Top-level borrows of forwarded host resources are lent through
-    /// temporaries, declared in `lets`.
-    fn host_to_guest_arg(&self, ty: &Type, e: &str, lets: &mut String, i: usize) -> Result<String> {
-        if let Type::Id(id) = ty {
-            if let TypeDefKind::Handle(Handle::Borrow(r)) = &self.resolve.types[*id].kind {
-                let r = self.dealias(*r);
-                if let Some((_, w)) = self.host.get(&r) {
-                    writeln!(lets, "let lent{i} = crate::forward::{w}::lend({e});")?;
-                    return Ok(format!("&lent{i}"));
-                }
-            }
+    /// For host → guest, the wrapper to lend with if `t` is directly a borrow
+    /// of a forwarded host resource.
+    fn lent_wrapper(&self, c: Conv, t: &Type) -> Option<String> {
+        if !matches!(c, Conv::HostToGuest) {
+            return None;
         }
-        let leaf = |h: &Handle, e: &str| -> Result<Option<String>> {
-            match h {
-                Handle::Own(r) => {
-                    let r = self.dealias(*r);
-                    if let Some((v, w)) = self.host.get(&r) {
-                        return Ok(Some(format!(
-                            "{}::new(crate::forward::{w}::owned({e}))",
-                            self.named_path(*v)?
-                        )));
-                    }
-                    Ok(self
-                        .export_res
-                        .get(&r)
-                        .map(|w| format!("{e}.into_inner::<crate::forward::{w}>().into_guest()")))
-                }
-                Handle::Borrow(r) => {
-                    let r = self.dealias(*r);
-                    if self.host.contains_key(&r) {
-                        bail!("forward: borrows of forwarded resources are only supported as top-level parameters");
-                    }
-                    Ok(self
-                        .export_res
-                        .get(&r)
-                        .map(|w| format!("{e}.get::<crate::forward::{w}>().guest()")))
-                }
+        let Type::Id(id) = t else { return None };
+        match &self.resolve.types[self.dealias(*id)].kind {
+            TypeDefKind::Handle(Handle::Borrow(r)) => {
+                self.host.get(&self.dealias(*r)).map(|(_, w)| w.clone())
             }
-        };
-        Ok(self.convert(ty, e, &leaf)?.unwrap_or(e.into()))
+            _ => None,
+        }
     }
 
-    /// Guest-side value → host-side value, for results from the guest. `ty` is
-    /// the host-side (World A) type.
-    fn guest_to_host(&self, ty: &Type, e: &str) -> Result<String> {
-        let leaf = |h: &Handle, e: &str| -> Result<Option<String>> {
-            match h {
-                Handle::Own(r) => {
-                    let r = self.dealias(*r);
-                    if let Some((_, w)) = self.host.get(&r) {
-                        return Ok(Some(format!("{e}.into_inner::<crate::forward::{w}>().into_host()")));
-                    }
-                    Ok(match self.export_res.get(&r) {
+    /// Converts one handle for `conv`.
+    fn leaf(&self, h: &Handle, e: &str, c: Conv, cx: &mut Ctx<'_>) -> Result<Option<String>> {
+        let (own, r) = match h {
+            Handle::Own(r) => (true, self.dealias(*r)),
+            Handle::Borrow(r) => (false, self.dealias(*r)),
+        };
+        let not_bound = |cx: &Ctx<'_>| {
+            if cx.bound {
+                bail!(
+                    "forward: lending a host borrow to the guest is only supported at the top \
+                     level, in records, and directly in `list<borrow<..>>` or \
+                     `option<borrow<..>>`, not deeper inside lists, options, results, or variants"
+                );
+            }
+            Ok(())
+        };
+        // A virtual resource the donut doesn't forward can't be converted.
+        if matches!(c, Conv::VirtToHost | Conv::HostToVirt)
+            && !self.virt.contains_key(&r)
+            && self.virtual_copies.contains(&self.owner(r)?)
+        {
+            bail!(
+                "forward: `{}` uses resource `{}`, whose interface is virtualized but not \
+                 forwarded; forward it too",
+                "a forwarded interface",
+                self.resource_name(r)
+            );
+        }
+        Ok(match (c, own) {
+            (Conv::VirtToHost, true) => self
+                .virt
+                .get(&r)
+                .map(|(_, w)| format!("{e}.into_inner::<crate::forward::{w}>().into_host()")),
+            // `RBorrow::get` returns `&'a T` (the borrow's lifetime, not the
+            // binding's), so this works for rebound values too.
+            (Conv::VirtToHost, false) => self
+                .virt
+                .get(&r)
+                .map(|(_, w)| format!("{e}.get::<crate::forward::{w}>().host()")),
+            (Conv::HostToVirt, true) => match self.virt.get(&r) {
+                Some((_, w)) => Some(format!(
+                    "{}::new(crate::forward::{w}::owned({e}))",
+                    self.named_path(r)?
+                )),
+                None => None,
+            },
+            (Conv::HostToVirt, false) | (Conv::GuestToHost, false) => None,
+            (Conv::HostToGuest, true) => {
+                if let Some((v, w)) = self.host.get(&r) {
+                    Some(format!("{}::new(crate::forward::{w}::owned({e}))", self.named_path(*v)?))
+                } else {
+                    self.export_res
+                        .get(&r)
+                        .map(|w| format!("{e}.into_inner::<crate::forward::{w}>().into_guest()"))
+                }
+            }
+            (Conv::HostToGuest, false) => {
+                if let Some((_, w)) = self.host.get(&r) {
+                    // Lend the host's resource to the guest for the call.
+                    not_bound(cx)?;
+                    let n = *cx.n;
+                    *cx.n += 1;
+                    writeln!(cx.lets, "let lent{n} = crate::forward::{w}::lend({e});")?;
+                    Some(format!("&lent{n}"))
+                } else if let Some(w) = self.export_res.get(&r) {
+                    Some(format!("{e}.get::<crate::forward::{w}>().guest()"))
+                } else {
+                    None
+                }
+            }
+            (Conv::GuestToHost, true) => {
+                if let Some((_, w)) = self.host.get(&r) {
+                    Some(format!("{e}.into_inner::<crate::forward::{w}>().into_host()"))
+                } else {
+                    match self.export_res.get(&r) {
                         Some(w) => Some(format!(
                             "{}::new(crate::forward::{w}::wrap({e}))",
                             self.named_path(r)?
                         )),
                         None => None,
-                    })
+                    }
                 }
-                Handle::Borrow(_) => Ok(None),
             }
-        };
-        Ok(self.convert(ty, e, &leaf)?.unwrap_or(e.into()))
+        })
     }
 
-    /// How a converted argument is passed to an import: values containing
-    /// handles are passed as converted, everything else through `Arg`.
+    /// Converts a function result (a local, so records can be rebuilt from
+    /// its fields).
+    fn convert_result(&self, ty: &Type, e: &str, c: Conv) -> Result<String> {
+        let mut lets = String::new();
+        let mut n = 0;
+        let mut cx = Ctx { lets: &mut lets, n: &mut n, bound: false };
+        Ok(self.conv(ty, e, c, &mut cx)?.unwrap_or(e.into()))
+    }
+
+    /// How a converted argument is passed to an import:
+    /// * without handles: through `Arg` (`&str`, `&[T]`, `&T`, ...);
+    /// * a handle, an option, or anything with an owned handle: as converted
+    ///   (by value, or already a reference for a borrow);
+    /// * other values with only borrowed handles (lists, records): by
+    ///   reference.
     fn pass(&self, ty: &Type, converted: &str, name: &str) -> String {
-        if self.any_handle(ty) {
+        if !self.any_handle(ty) {
+            return format!("crate::forward::Arg::arg(&{name})");
+        }
+        // wit-bindgen passes options as `Option<&T>`, not `&Option<T>`.
+        let by_value = matches!(ty, Type::Id(id)
+            if matches!(self.resolve.types[self.dealias(*id)].kind,
+                TypeDefKind::Handle(_) | TypeDefKind::Option(_)));
+        if by_value || self.has(ty, &|h| matches!(h, Handle::Own(_))) {
             converted.to_string()
         } else {
-            format!("crate::forward::Arg::arg(&{name})")
+            format!("&{converted}")
         }
     }
 
@@ -741,7 +861,7 @@ pub mod forward {
                 callee: format!("{hpath}::{}", self.fn_name(func)),
                 args,
                 lets,
-                convert_ret: &|g, t, e| g.host_to_virt(t, e),
+                convert_ret: &|g, t, e| g.convert_result(t, e, Conv::HostToVirt),
                 constructor_wrap: None,
             })?;
         }
@@ -770,7 +890,7 @@ pub mod forward {
                     callee,
                     args,
                     lets,
-                    convert_ret: &|g, t, e| g.host_to_virt(t, e),
+                    convert_ret: &|g, t, e| g.convert_result(t, e, Conv::HostToVirt),
                     constructor_wrap: Some(format!("{w}::owned")),
                 })?;
             }
@@ -780,21 +900,23 @@ pub mod forward {
     }
 
     fn host_args(&self, func: &Function, skip: usize) -> Result<(Vec<String>, String)> {
-        let mut args = Vec::new();
-        for (i, p) in func.params.iter().enumerate().skip(skip) {
-            let name = format!("p{i}");
-            let converted = self.virt_to_host(&p.ty, &name)?;
-            args.push(self.pass(&p.ty, &converted, &name));
-        }
-        Ok((args, String::new()))
+        self.args(func, skip, Conv::VirtToHost)
     }
 
     fn guest_args(&self, func: &Function, skip: usize) -> Result<(Vec<String>, String)> {
+        self.args(func, skip, Conv::HostToGuest)
+    }
+
+    /// The converted arguments of `func`, and statements that must run
+    /// before the call (lent temporaries).
+    fn args(&self, func: &Function, skip: usize, c: Conv) -> Result<(Vec<String>, String)> {
         let mut args = Vec::new();
         let mut lets = String::new();
+        let mut n = 0;
         for (i, p) in func.params.iter().enumerate().skip(skip) {
             let name = format!("p{i}");
-            let converted = self.host_to_guest_arg(&p.ty, &name, &mut lets, i)?;
+            let mut cx = Ctx { lets: &mut lets, n: &mut n, bound: false };
+            let converted = self.conv(&p.ty, &name, c, &mut cx)?.unwrap_or(name.clone());
             args.push(self.pass(&p.ty, &converted, &name));
         }
         Ok((args, lets))
@@ -831,7 +953,7 @@ pub mod forward {
                 callee: format!("{gpath}::{}", self.fn_name(func)),
                 args,
                 lets,
-                convert_ret: &|g, t, e| g.guest_to_host(t, e),
+                convert_ret: &|g, t, e| g.convert_result(t, e, Conv::GuestToHost),
                 constructor_wrap: None,
             })?;
         }
@@ -860,7 +982,7 @@ pub mod forward {
                     callee,
                     args,
                     lets,
-                    convert_ret: &|g, t, e| g.guest_to_host(t, e),
+                    convert_ret: &|g, t, e| g.convert_result(t, e, Conv::GuestToHost),
                     constructor_wrap: Some(format!("{w}::wrap")),
                 })?;
             }

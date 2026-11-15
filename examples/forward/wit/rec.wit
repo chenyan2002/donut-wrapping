@@ -7,19 +7,39 @@ interface kv {
     get: func(key: string) -> option<string>;
   }
   open: func(name: string) -> store;
+
+  // Shapes that forwarding has to convert.
+  record entry { key: string, value: string }         // no handles
+  record pair { first: store, second: store }          // owned handles in a record
+  variant lookup { missing, found(store) }             // an owned handle in a variant
+  record view { s: borrow<store>, prefix: string }     // a borrow in a record
+  open-all: func(names: list<string>) -> list<store>;  // a list of owned handles
+  open-pair: func(a: string, b: string) -> pair;
+  find: func(name: string) -> lookup;
+  dump: func(v: view) -> list<entry>;
+  // Borrows in a list and an option: the number of keys in all of them.
+  count: func(stores: list<borrow<store>>, extra: option<borrow<store>>) -> u32;
 }
 
 // What the app exports. `session` is defined by the app.
 interface app {
-  use kv.{store};
+  use kv.{store, view, pair};
   resource session {
     constructor(user: string);
     greet: func(s: borrow<store>) -> string;
   }
+  // Defined by the app, holding a `kv` record with owned host handles.
+  record report { lines: list<string>, kept: pair }
   run: func(s: borrow<store>) -> string;
+  // A borrow inside a record in, a record with owned handles out.
+  summarize: func(v: view) -> report;
+  // A borrow in an option in (lent by the donut); the app passes both on to
+  // `kv.count` as a list and an option. (Not `list<borrow<store>>`: Rust
+  // exports of that don't compile with wit-bindgen 0.63, see the plan.)
+  tally: func(first: borrow<store>, extra: option<borrow<store>>) -> u32;
 }
 
-// The app's world, and also the recording donut's: the donut has the same
+// The app's world, and also the forwarding donuts': the donut has the same
 // imports and exports as the app it wraps.
 world app-world {
   import kv;

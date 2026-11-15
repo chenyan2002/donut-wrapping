@@ -21,6 +21,8 @@ wasmtime::component::bindgen!({
 #[derive(Default)]
 pub struct KvStore(HashMap<String, String>);
 
+use example::rec::kv::{Entry, Lookup, Pair, View};
+
 struct State {
     ctx: WasiCtx,
     table: ResourceTable,
@@ -38,6 +40,47 @@ impl example::rec::kv::Host for State {
     fn open(&mut self, name: String) -> Resource<KvStore> {
         self.calls.push(format!("open {name}"));
         self.table.push(KvStore::default()).unwrap()
+    }
+    fn open_all(&mut self, names: Vec<String>) -> Vec<Resource<KvStore>> {
+        self.calls.push(format!("open-all {names:?}"));
+        names.iter().map(|_| self.table.push(KvStore::default()).unwrap()).collect()
+    }
+    fn open_pair(&mut self, a: String, b: String) -> Pair {
+        self.calls.push(format!("open-pair {a} {b}"));
+        Pair {
+            first: self.table.push(KvStore::default()).unwrap(),
+            second: self.table.push(KvStore::default()).unwrap(),
+        }
+    }
+    fn find(&mut self, name: String) -> Lookup {
+        self.calls.push(format!("find {name}"));
+        if name.starts_with('x') {
+            Lookup::Found(self.table.push(KvStore::default()).unwrap())
+        } else {
+            Lookup::Missing
+        }
+    }
+    fn count(&mut self, stores: Vec<Resource<KvStore>>, extra: Option<Resource<KvStore>>) -> u32 {
+        self.calls.push(format!("count {} {}", stores.len(), extra.is_some()));
+        stores
+            .iter()
+            .chain(extra.iter())
+            .map(|s| self.table.get(s).unwrap().0.len() as u32)
+            .sum()
+    }
+    fn dump(&mut self, v: View) -> Vec<Entry> {
+        self.calls.push(format!("dump {}", v.prefix));
+        let mut entries = self
+            .table
+            .get(&v.s)
+            .unwrap()
+            .0
+            .iter()
+            .filter(|(k, _)| k.starts_with(&v.prefix))
+            .map(|(k, v)| Entry { key: k.clone(), value: v.clone() })
+            .collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.key.cmp(&b.key));
+        entries
     }
 }
 
@@ -85,6 +128,24 @@ fn drive(component: &Path) -> wasmtime::Result<Outcome> {
     let s = session.call_constructor(&mut store, "ann")?;
     results.push(session.call_greet(&mut store, s, borrow())?);
     s.resource_drop(&mut store)?;
+    // A borrow inside a record in; a record with owned host stores out.
+    let view = View { s: borrow(), prefix: "vis".into() };
+    let report = app.example_rec_app().call_summarize(&mut store, &view)?;
+    let kept = |r: &Resource<KvStore>, store: &Store<State>| {
+        let mut kv = store.data().table.get(r).unwrap().0.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>();
+        kv.sort();
+        kv.join(",")
+    };
+    // A borrow in an option, lent by the donut; the app passes it on, with
+    // another, as a list and an option of borrows.
+    let tally = app.example_rec_app().call_tally(&mut store, borrow(), Some(borrow()))?;
+    results.push(format!("tally={tally}"));
+    results.push(format!(
+        "report lines={:?} first={} second={}",
+        report.lines,
+        kept(&report.kept.first, &store),
+        kept(&report.kept.second, &store),
+    ));
 
     Ok(Outcome {
         results,
@@ -103,32 +164,14 @@ fn recorder_is_transparent_and_sees_every_call() -> anyhow::Result<()> {
     let wrapped = drive(&dir.join("out/recorder.wasm")).map_err(w)?;
     assert_eq!(wrapped.results, bare.results);
     assert_eq!(wrapped.host_calls, bare.host_calls);
+    // Every call and drop, in order (`BLESS=1` to update).
+    let expected = dir.join("recorder.expected");
+    if std::env::var_os("BLESS").is_some() {
+        std::fs::write(&expected, &wrapped.stdout)?;
+    }
     assert_eq!(
         wrapped.stdout.lines().collect::<Vec<_>>(),
-        [
-            "record: Export example:rec/app.run[<store>]",
-            "record: Import example:rec/kv.[method]store.set[\"visits\", \"1\"]",
-            "record: Import example:rec/kv.[method]store.set -> ()",
-            "record: Import example:rec/kv.open[\"cache\"]",
-            "record: Import example:rec/kv.open -> <store>",
-            "record: Import example:rec/kv.[method]store.set[\"k\", \"v\"]",
-            "record: Import example:rec/kv.[method]store.set -> ()",
-            "record: Import example:rec/kv.[method]store.get[\"visits\"]",
-            "record: Import example:rec/kv.[method]store.get -> Some(\"1\")",
-            "record: Import example:rec/kv.[method]store.get[\"k\"]",
-            "record: Import example:rec/kv.[method]store.get -> Some(\"v\")",
-            // The app dropped its `cache` store: the virtual wrapper and, with
-            // it, the host's store.
-            "record: Import example:rec/kv.store dropped",
-            "record: Export example:rec/app.run -> \"visits=Some(\\\"1\\\") cache=Some(\\\"v\\\")\"",
-            "record: Export example:rec/app.[constructor]session[\"ann\"]",
-            "record: Export example:rec/app.[constructor]session -> <session>",
-            "record: Export example:rec/app.[method]session.greet[<store>]",
-            "record: Import example:rec/kv.[method]store.get[\"visits\"]",
-            "record: Import example:rec/kv.[method]store.get -> Some(\"1\")",
-            "record: Export example:rec/app.[method]session.greet -> \"hello ann (visits=Some(\\\"1\\\"))\"",
-            "record: Export example:rec/app.session dropped",
-        ]
+        std::fs::read_to_string(&expected)?.lines().collect::<Vec<_>>(),
     );
     Ok(())
 }
@@ -143,11 +186,14 @@ fn overridden_hooks_change_behaviour() -> anyhow::Result<()> {
     let w = |e: wasmtime::Error| anyhow::anyhow!("{e:?}");
     let bare = drive(&dir.join("out/app.wasm")).map_err(w)?;
     let wrapped = drive(&dir.join("out/interceptor.wasm")).map_err(w)?;
+    // The same as the bare app, except where the two overrides apply.
     assert_eq!(
         wrapped.results,
         [
-            "visits=None cache=Some(\"v\")",
-            "hello ann (visits=None) [intercepted]",
+            bare.results[0].replacen("visits=Some(\"1\")", "visits=None", 1),
+            "hello ann (visits=None) [intercepted]".to_string(),
+            bare.results[2].clone(),
+            bare.results[3].clone(),
         ]
     );
     // The host never saw the hidden `get`s; it saw everything else.

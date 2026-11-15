@@ -1,0 +1,63 @@
+record: Export example:rec/app.run[<store>]
+record: Import example:rec/kv.[method]store.set["visits", "1"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.open["cache"]
+record: Import example:rec/kv.open -> <store>
+record: Import example:rec/kv.[method]store.set["k", "v"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.open-all[["a", "b"]]
+record: Import example:rec/kv.open-all -> <..>
+record: Import example:rec/kv.[method]store.set["i", "0"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.[method]store.set["i", "1"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.open-pair["p1", "p2"]
+record: Import example:rec/kv.open-pair -> <..>
+record: Import example:rec/kv.[method]store.set["side", "first"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.dump[<..>]
+record: Import example:rec/kv.dump -> [Entry { key: "visits", value: "1" }]
+record: Import example:rec/kv.[method]store.get["visits"]
+record: Import example:rec/kv.[method]store.get -> Some("1")
+record: Import example:rec/kv.[method]store.get["k"]
+record: Import example:rec/kv.[method]store.get -> Some("v")
+record: Import example:rec/kv.[method]store.get["i"]
+record: Import example:rec/kv.[method]store.get -> Some("0")
+record: Import example:rec/kv.[method]store.get["i"]
+record: Import example:rec/kv.[method]store.get -> Some("1")
+record: Import example:rec/kv.[method]store.get["side"]
+record: Import example:rec/kv.[method]store.get -> Some("first")
+record: Import example:rec/kv.find["xyz"]
+record: Import example:rec/kv.find -> <..>
+record: Import example:rec/kv.[method]store.set["seen", "1"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Import example:rec/kv.[method]store.get["seen"]
+record: Import example:rec/kv.[method]store.get -> Some("1")
+record: Import example:rec/kv.store dropped
+record: Import example:rec/kv.find["nope"]
+record: Import example:rec/kv.find -> <..>
+record: Import example:rec/kv.store dropped
+record: Import example:rec/kv.store dropped
+record: Import example:rec/kv.store dropped
+record: Import example:rec/kv.store dropped
+record: Import example:rec/kv.store dropped
+record: Export example:rec/app.run -> "visits=Some(\"1\") cache=Some(\"v\") all=[Some(\"0\"), Some(\"1\")] pair=Some(\"first\") found:Some(\"1\") missing dump=[Entry { key: \"visits\", value: \"1\" }]"
+record: Export example:rec/app.[constructor]session["ann"]
+record: Export example:rec/app.[constructor]session -> <session>
+record: Export example:rec/app.[method]session.greet[<store>]
+record: Import example:rec/kv.[method]store.get["visits"]
+record: Import example:rec/kv.[method]store.get -> Some("1")
+record: Export example:rec/app.[method]session.greet -> "hello ann (visits=Some(\"1\"))"
+record: Export example:rec/app.session dropped
+record: Export example:rec/app.summarize[<..>]
+record: Import example:rec/kv.dump[<..>]
+record: Import example:rec/kv.dump -> [Entry { key: "visits", value: "1" }]
+record: Import example:rec/kv.open-pair["k1", "k2"]
+record: Import example:rec/kv.open-pair -> <..>
+record: Import example:rec/kv.[method]store.set["from", "summarize"]
+record: Import example:rec/kv.[method]store.set -> ()
+record: Export example:rec/app.summarize -> <..>
+record: Export example:rec/app.tally[<store>, <..>]
+record: Import example:rec/kv.count[<..>, <..>]
+record: Import example:rec/kv.count -> 2
+record: Export example:rec/app.tally -> 2

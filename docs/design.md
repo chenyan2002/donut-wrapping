@@ -545,8 +545,14 @@ instead of re-encoding wit-bindgen's parameter conventions.
 
 A single trait means users write one `impl` and override only what they need.
 
-Not yet: records or variants containing forwarded resources, and non-top-level
-borrows.
+Records, variants, tuples, and containers holding forwarded resources are
+converted by generated code too. World B reuses World A's types wherever their
+Rust rendering agrees (`Plan::world_b_shared_types`), so everything resource-free
+passes through unchanged. Borrows nested in records are supported, including
+lending a host borrow inside a record to the guest. Borrows inside lists, options,
+results, and variants convert too (`RBorrow<'a>::get` returns `&'a T`). Lending a
+host borrow to the guest works at the top level, in records, and directly in
+`option`/`list` of borrows. Still rejected: lending deeper inside containers.
 
 **Prior art:** [proxy-component](https://github.com/chenyan2002/proxy-component)
 (`src/traits/proxy.rs`) already generates this kind of conversion as a `ToProxy` trait,

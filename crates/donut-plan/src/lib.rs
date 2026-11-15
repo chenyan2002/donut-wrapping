@@ -18,7 +18,7 @@
 
 use anyhow::{Context, Result, bail};
 use heck::ToUpperCamelCase;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use wit_bindgen_core::{Files, WorldGenerator, name_package_module};
 use wit_bindgen_rust::{Opts, WithOption, to_rust_ident};
@@ -26,7 +26,7 @@ use wit_component::donut::{GUEST_EXPORT_MODULE_PREFIX, MANIFEST_SECTION_NAME, en
 mod forward;
 
 use wit_parser::{
-    FunctionKind, InterfaceId, LiveTypes, PackageId, Resolve, TypeDefKind, TypeOwner, WorldId,
+    FunctionKind, Handle, Type, TypeId, InterfaceId, LiveTypes, PackageId, Resolve, TypeDefKind, TypeOwner, WorldId,
     WorldItem, WorldKey,
 };
 
@@ -105,13 +105,13 @@ impl Plan {
             .imports
             .keys()
             .map(|k| resolve.name_world_key(k))
-            .collect::<HashSet<_>>();
-        let forwarded = config.forward.iter().collect::<HashSet<_>>();
+            .collect::<BTreeSet<_>>();
+        let forwarded = config.forward.iter().collect::<BTreeSet<_>>();
         let wanted = config
             .virtualize
             .iter()
             .chain(config.forward.iter().filter(|f| guest_imports.contains(*f)))
-            .collect::<HashSet<_>>();
+            .collect::<BTreeSet<_>>();
         let mut virtualized = Vec::new();
         let mut passthrough = Vec::new();
         for (key, item) in g.imports.iter() {
@@ -141,7 +141,7 @@ impl Plan {
 
         // 2. A passthrough interface can't mention a virtualized resource:
         // the host's `f(request)` can't take the donut's virtual `request`.
-        let virtual_set = virtualized.iter().copied().collect::<HashSet<_>>();
+        let virtual_set = virtualized.iter().copied().collect::<BTreeSet<_>>();
         for p in passthrough.iter() {
             let mut live = LiveTypes::default();
             live.add_interface(&resolve, *p);
@@ -362,13 +362,13 @@ impl Plan {
 
     fn generate_world_b(&self, opts: &Opts) -> Result<String> {
         let mut resolve = self.resolve.clone();
-        let guest_exports = self.guest_exports.iter().copied().collect::<HashSet<_>>();
+        let guest_exports = self.guest_exports.iter().copied().collect::<BTreeSet<_>>();
         let virtual_export = self
             .virtualized
             .iter()
             .copied()
             .zip(self.virtual_exports.iter().copied())
-            .collect::<std::collections::HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
         let mut with = Vec::new();
         let deps = resolve.worlds[self.world_b]
             .imports
@@ -380,6 +380,15 @@ impl Plan {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        // Types World B can share with World A (see `world_b_shared_types`).
+        for (id, path) in self.world_b_shared_types() {
+            let def = &resolve.types[id];
+            let TypeOwner::Interface(owner) = def.owner else { continue };
+            with.push((
+                format!("{}/{}", resolve.id_of(owner).unwrap(), def.name.as_ref().unwrap()),
+                WithOption::Path(path),
+            ));
+        }
         for (key, id) in deps {
             if let Some(export) = virtual_export.get(&id) {
                 // A virtualized dependency: keep its non-resource types (they're
@@ -417,6 +426,93 @@ impl Plan {
             ..Opts::default()
         };
         run(opts, &resolve, self.world_b).context("generating bindings for the guest's exports")
+    }
+}
+
+impl Plan {
+    /// The types World B reuses from World A instead of generating its own,
+    /// with their World-A paths. A type is shared when its Rust rendering is
+    /// the same on World A's export side and World B's import side:
+    ///
+    /// * in a virtualized dependency, unless it contains a borrow of a
+    ///   virtualized resource (World A renders that as an inbound `RBorrow`,
+    ///   World B as an outbound `&R`); owned virtual resources are remapped to
+    ///   World A's types anyway;
+    /// * in a forwarded export (exported by both World A and the guest),
+    ///   unless it contains any handle, since World A's handles there are the
+    ///   host's and World B's are the guest's or virtual.
+    ///
+    /// Only types defined in the interface itself (not `use`d aliases) and
+    /// not resources.
+    pub fn world_b_shared_types(&self) -> BTreeMap<TypeId, String> {
+        let resolve = &self.resolve;
+        let virtualized = self.virtualized.iter().copied().collect::<BTreeSet<_>>();
+        let virtual_resource = |r: TypeId| {
+            let r = dealias(resolve, r);
+            matches!(resolve.types[r].owner, TypeOwner::Interface(i) if virtualized.contains(&i))
+        };
+        let mut out = BTreeMap::new();
+        let mut share = |iface: InterfaceId, target: InterfaceId, ok: &dyn Fn(&Type) -> bool| {
+            for (name, ty) in resolve.interfaces[iface].types.iter() {
+                let def = &resolve.types[*ty];
+                if matches!(def.kind, TypeDefKind::Resource | TypeDefKind::Type(Type::Id(_))) {
+                    continue;
+                }
+                if ok(&Type::Id(*ty)) {
+                    out.insert(
+                        *ty,
+                        format!("crate::{}::{}", module_path(resolve, target, true), camel(name)),
+                    );
+                }
+            }
+        };
+        // Only interfaces World B imports: wit-bindgen rejects unused remaps.
+        let in_world_b = resolve.worlds[self.world_b]
+            .imports
+            .values()
+            .filter_map(|item| match item {
+                WorldItem::Interface { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for (id, export) in self.virtualized.iter().zip(self.virtual_exports.iter()) {
+            if !in_world_b.contains(id) {
+                continue;
+            }
+            share(*id, *export, &|t| {
+                !type_has(resolve, t, &|h| matches!(h, Handle::Borrow(r) if virtual_resource(*r)))
+            });
+        }
+        for e in self.forward_exports.iter() {
+            share(*e, *e, &|t| !type_has(resolve, t, &|_| true));
+        }
+        out
+    }
+}
+
+fn dealias(resolve: &Resolve, mut id: TypeId) -> TypeId {
+    while let TypeDefKind::Type(Type::Id(next)) = resolve.types[id].kind {
+        id = next;
+    }
+    id
+}
+
+/// Whether `ty` contains a handle matching `f`.
+pub(crate) fn type_has(resolve: &Resolve, ty: &Type, f: &dyn Fn(&Handle) -> bool) -> bool {
+    let Type::Id(id) = ty else { return false };
+    match &resolve.types[*id].kind {
+        TypeDefKind::Handle(h) => f(h),
+        TypeDefKind::Record(r) => r.fields.iter().any(|x| type_has(resolve, &x.ty, f)),
+        TypeDefKind::Variant(v) => {
+            v.cases.iter().any(|c| c.ty.as_ref().is_some_and(|t| type_has(resolve, t, f)))
+        }
+        TypeDefKind::Tuple(t) => t.types.iter().any(|t| type_has(resolve, t, f)),
+        TypeDefKind::Option(t) | TypeDefKind::List(t) | TypeDefKind::Type(t) => type_has(resolve, t, f),
+        TypeDefKind::Result(r) => {
+            r.ok.as_ref().is_some_and(|t| type_has(resolve, t, f))
+                || r.err.as_ref().is_some_and(|t| type_has(resolve, t, f))
+        }
+        _ => false,
     }
 }
 
