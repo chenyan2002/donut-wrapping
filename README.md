@@ -1,4 +1,4 @@
-# donut wrapping for Rust components
+# Donut wrapping for Rust components
 
 `donut!` lets a Rust component **wrap another component**:
 * it implements (*virtualizes*) some of the inner component's imports,
@@ -7,13 +7,11 @@
   it on the same stack.
 
 The result is a single component with whatever world you choose. This is the
-"donut wrapping" pattern from the component model Explainer's
-[Virtualization](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md)
-section. Use it to:
+[donut wrapping]( https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md)) pattern from the component model Explainer. Use it to:
 * sandbox or mock a guest's host APIs;
 * run a guest against a host it wasn't built for;
 * record or replay a guest's calls;
-* build a server that embeds plugin components.
+* inspect a request for security and billing.
 
 ## Requirements
 
@@ -59,7 +57,7 @@ interface handler {
   handle: func(path: string) -> string; 
 }
 
-interface fs {  // only on the guest side
+interface fs {    // only on the guest side
   resource file { 
     read: func() -> string; 
     write: func(data: string); 
@@ -74,13 +72,13 @@ interface secrets {  // only on the host side
 }
 
 world app  { 
-  import outgoing; 
   import fs;
+  import outgoing; 
   export handler; 
 }
 world host { 
-  import outgoing; 
   import secrets;
+  import outgoing; 
   export handler; 
 }
 ```
@@ -127,7 +125,7 @@ donut::donut!({
     // Customize: control the only way out to the network.
     virtualize: ["example:app/outgoing"],
     // Missing on this host: only what the app uses. A mocked `file` is an
-    // `OpenFile`.
+    // `OpenFile` struct.
     mock: [{ "example:app/fs": { file: OpenFile } }],
     hooks: Policy,
 });
@@ -147,11 +145,14 @@ pub struct Policy;
 
 impl exports::virtual_example::app::outgoing::Guest for Policy {
     fn send(r: Request) -> Result<u16, String> {
-        // The app's request wraps a host request: take it back.
-        let req = r.into_inner::<FwdExampleAppTypesRequest>().into_host();
+        // Read host request
+        let req: &example::app::types::Request = r.get::<FwdExampleAppTypesRequest>().host();
         let url = req.url();
         let host = url.split("://").nth(1).and_then(|s| s.split('/').next()).unwrap_or_default();
         let token = Vault::open("tokens").get(host).ok_or_else(|| format!("{host}: not allowed"))?;
+
+        // Transfer the request ownership to host
+        let req: example::app::types::Request = r.into_inner::<FwdExampleAppTypesRequest>().into_host();
         req.set_header("authorization", &format!("Bearer {token}"));
         host_outgoing::send(req)
     }
@@ -205,11 +206,11 @@ Forwarding `outgoing` and overriding `Hooks::example_app_outgoing_send` with the
 same code would behave the same today. The difference is in the code you don't
 write. Each list has a default for every function you don't implement:
 
-| List | A function you don't write | Fails |
-|---|---|---|
-| `forward` | calls the host | open |
-| `mock` | panics (`unimplemented!()`) | closed, at run time |
-| `virtualize` | doesn't compile | closed, at compile time |
+| List | A function you don't write |
+|---|---|
+| `forward` | calls the host |
+| `mock` | panics (`unimplemented!()`) |
+| `virtualize` | doesn't compile |
 
 If `outgoing` gains a `send-many` in a later version, forwarding would send it
 to the host without a token, and still compile. Virtualizing stops the build
@@ -337,6 +338,54 @@ Names are converted to Rust case (`fastly:compute/http-req` becomes
 out. None of them depend on what else is listed, and they're fully qualified:
 `wasi:http/types` and `example:http/types` can be forwarded together.
 
+### Resources
+
+Every resource the guest sees through a listed interface is a wit-bindgen
+*export* handle in your component (`exports::virtual_<ns>::…::<Resource>`),
+backed by a Rust value, its *rep*. You choose the rep for `virtualize` (`type
+Request = MyRequest`). For `forward` and `mock`, it's a generated wrapper.
+
+**Handles** (wit-bindgen), with `R` the guest-side handle and `Rep` its rep:
+
+| | |
+|---|---|
+| `R::new(rep)` | Create a resource for the guest. Returning `R`, or passing it as an owned argument, transfers it to the guest. |
+| `r.get::<Rep>()` → `&Rep` | Borrow the rep. Also on `RBorrow<'_>`, for a borrowed argument. |
+| `r.into_inner::<Rep>()` → `Rep` | Take an owned handle back: the guest's handle is gone, and you own the rep. |
+
+In `Hooks` methods, a resource's own methods get `this: &Rep` directly.
+
+**Forwarded resources** (`forward::Fwd…`) wrap the host's resource `H`, from
+`<ns>::<pkg>::<iface>`:
+
+| | |
+|---|---|
+| `Fwd…::owned(h)` | Wrap a host resource you own. `R::new(Fwd…::owned(h))` transfers it to the guest. |
+| `Fwd…::lend(&h)` → `R` | Lend a host resource to the guest for one call. Pass `&lent` as a borrowed argument and drop it before `h`. The guest can't keep it, and `h` stays yours. |
+| `w.host()` → `&H` | Borrow the host resource, e.g. to read it. |
+| `w.into_host()` → `H` | Take the host resource, e.g. to pass it to the host. Panics if the wrapper is lent. |
+| drop | Drops the host resource (unless lent), and calls `Hooks::dropped`. |
+
+So in the example, the gate reads the app's request with
+`r.get::<Fwd…>().host()`, then takes it from the app and gives it to the host
+with `r.into_inner::<Fwd…>().into_host()`.
+
+A forwarded *export*'s resources go the other way: the host holds your
+resource, which wraps the guest's (`Fwd…::wrap(g)`, `w.guest()`,
+`w.into_guest()`). The generated forwarding uses these; you rarely need them.
+
+**Mocked resources** (`forward::Mock…`) hold the state type declared in `mock`:
+
+| | |
+|---|---|
+| `Mock…::new(state)` | Wrap a state. `R::new(Mock…::new(state))` gives it to the guest. |
+| `*w` (`Deref`) | Read the state: `this.contents`. |
+| `w.into_inner()` → `State` | Take the state back. |
+| drop | Drops the state, and calls `Hooks::dropped`. |
+
+A resource without a declared state type has none of these: it can't be
+created.
+
 ## Things to know
 
 * **Re-entrance.** Any `guest::…` call can call back into your virtual interfaces
@@ -356,25 +405,3 @@ out. None of them depend on what else is listed, and they're fully qualified:
   * Rust *exports* taking `list<borrow<R>>` of an imported resource, which hit a
     wit-bindgen 0.63 bug, in your donut or in a guest.
 
-## Examples
-
-```sh
-cargo test        # builds every example and runs it on Wasmtime 49
-```
-
-`cargo test` needs `WASM_TOOLS` (or `wasm-tools` on `PATH`) from the donut branch.
-
-| Example | What it shows |
-|---|---|
-| [`examples/secrets`](examples/secrets) | The example above: `forward`, `virtualize`, `mock`, and passthrough in one donut, whose world differs from the guest's. |
-| [`examples/virtualize`](examples/virtualize) | The corner cases of virtualizing: re-entrant calls, resources defined by the donut and by the guest, records holding borrows and owned handles, a guest that imports and exports the same interface (middleware), passthrough, and guests whose start function calls the donut. |
-| [`examples/forward`](examples/forward) | **A transparent wrapper.** The donut has the same world as the app it wraps, and forwards every call to the host or the app. `recorder` logs every call; `interceptor` changes two of them. |
-| [`examples/fastly`](examples/fastly) | **Mocking a large API.** A mock Fastly Compute host around a real Fastly app ([proxy-component](https://github.com/chenyan2002/proxy-component)'s `tests/rust.wasm`; set `GUEST=<path>`). It mocks 60 functions and overrides the 13 the app uses. |
-
-## How it works
-
-* [`docs/design.md`](docs/design.md) is the design: how the guest's world is
-  inverted into bindings, and how wit-component's donut mode builds the nested
-  component, with a linkage table patched after the guest is instantiated.
-* [`docs/plan.md`](docs/plan.md) has the implementation status.
-* [`spike/`](spike) has a hand-written version of what the encoder produces.

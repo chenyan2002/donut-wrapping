@@ -30,11 +30,14 @@ pub struct Policy;
 
 impl exports::virtual_example::app::outgoing::Guest for Policy {
     fn send(r: Request) -> Result<u16, String> {
-        // The app's request wraps a host request: take it back.
-        let req = r.into_inner::<FwdExampleAppTypesRequest>().into_host();
+        // Read host request
+        let req: &example::app::types::Request = r.get::<FwdExampleAppTypesRequest>().host();
         let url = req.url();
         let host = url.split("://").nth(1).and_then(|s| s.split('/').next()).unwrap_or_default();
         let token = Vault::open("tokens").get(host).ok_or_else(|| format!("{host}: not allowed"))?;
+
+        // Transfer the request ownership to host
+        let req: example::app::types::Request = r.into_inner::<FwdExampleAppTypesRequest>().into_host();
         req.set_header("authorization", &format!("Bearer {token}"));
         host_outgoing::send(req)
     }
