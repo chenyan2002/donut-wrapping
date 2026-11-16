@@ -24,6 +24,7 @@ The whole pipeline works for the §3.1 example:
 
 | Example | What it shows | Tests (`crates/donut-tests`) |
 |---|---|---|
+| `examples/secrets` | the README example: an app wrapped for a host with a vault and no filesystem. `forward` (`types`, `handler`), `virtualize` (`outgoing`, the token gate), `mock` (`fs`), and passthrough (WASI) in one donut, with a world different from the guest's | `app_gets_tokens_it_never_sees` |
 | `examples/virtualize` | plain virtualization: re-entrance, exactly-once destructors, strings and lists, a guest-defined resource, a borrow and an owned handle inside records, `relay` imported and exported by the guest (a middleware), and passthrough of the guest's clock and `std` WASI. `init/` has two WAT guests whose start functions call the donut. | `virtualize`, `guest_start_calls_virtual_function`, `guest_start_calling_back_into_guest_traps` |
 | `examples/forward` | generated forwarding around an app with the same world as the donut: `recorder` (hooks observe every call) and `interceptor` (two functions overridden) | `recorder_is_transparent_and_sees_every_call`, `overridden_hooks_change_behaviour` |
 | `examples/fastly` | a mock Fastly Compute host around a real Fastly guest (proxy-component's `tests/rust.wasm`): 60 virtual functions | `fastly_guest` |
@@ -46,8 +47,13 @@ names.
 | `~/src/bytecodealliance/wasm-tools` | `donut` | release 1.263.0 (`7a2fa422c`) | wit-component donut mode (`82e38e96d`) |
 | `~/src/bytecodealliance/wasmtime` | `yan/ps1-memory-49` | v49.0.1 + 1 unrelated commit | runtime for tests (`target/debug/wasmtime`) |
 
-* This repo's `Cargo.toml` patches `wit-bindgen*` and the wasm-tools crates to these
-  checkouts (`[patch.crates-io]`).
+* This repo's `Cargo.toml` patches `wit-bindgen*` and the wasm-tools crates to the
+  pushed `donut` branches as **git** dependencies (`github.com/chenyan2002/{wit-bindgen,wasm-tools}`,
+  `[patch.crates-io]`), so others can build it. Users of `donut` have to copy that
+  block, since patches only apply in the root workspace (see `README.md`).
+* The `wasm-tools` CLI comes from the same branch (`cargo install --git … --branch donut
+  wasm-tools --locked`). `examples/common.sh` uses `wasm-tools` on PATH (or
+  `WASM_TOOLS`), and fails with install instructions if it lacks `--donut-guest`.
 * **Why wasm-tools is on 1.263.0:** wit-bindgen 0.63 builds against wasm-tools 0.263.
   Later wasm-tools `main` changes `Resolve::wasm_signature`, `Resolve::push_flat` and
   `SizeAlign::fill` to take a `WorldId` (the cm64 work, #2807/#2810), and
@@ -183,8 +189,8 @@ Remaining:
    | `fastly_guest` | `examples/fastly` + proxy-component's `tests/rust.wasm` | a real Fastly Compute guest (60 virtual functions, a versioned package, resource aliases, resources in `result`s); the host calls match proxy-component's recorded trace; 200 and 404 responses; the guest's stdout via WASI passthrough. Skipped if the guest isn't found (`GUEST`) |
 
    The WAT guests exist because Rust components can't run code at instantiation.
-   Tools added: `cargo run -p donut-plan --example expand` prints a formatted
-   expansion, and `tools/stubs.py` turns it into `unimplemented!()` trait impls.
+   Tool added: `cargo run -p donut-plan --example expand` prints a formatted
+   expansion (`FORWARD`, `MOCK`, `HOOKS` for generated impls).
 3. **CI.** Blocked on the local `[patch]` paths. Use git dependencies on the fork
    branches, or wait for upstream releases.
 
@@ -208,6 +214,7 @@ component, and one fewer hop per call.
 It needed two changes:
 * DonutPlan exports a **renamed copy** (`virtual-<ns>:…`) of a virtualized
   interface when the donut's own world imports or exports it (design §4 step 2).
+  It now always does, copying only the listed interfaces.
 * The manifest's virtual list is now (guest import → donut export) pairs, in
   donut-plan and in the wasm-tools `donut` working tree (uncommitted).
 
@@ -241,9 +248,17 @@ see every call and drop in both directions. Generated pieces:
     So wit-bindgen's import-parameter rules aren't reproduced.
   * Trait impl signatures use wit-bindgen's export-side (all-owned) rule.
 
+**Mocking: done.** `mock: [...]` virtualizes guest imports with generated impls
+whose `Hooks` methods default to `unimplemented!()`. The panic message names the
+hook to override. Resources get a `Mock<Ns><Pkg><Iface><Res>` wrapper over the
+state type declared in `mock` (`{ "<iface>": { <res>: <Type> } }`); undeclared
+resources get an uninhabited wrapper and can't be created.
+`examples/fastly` now uses it: the 60-function hand-written `fastly.rs` became 13
+overrides.
+
 **Per-method interception: done.** `forward::Hooks` has one overridable method
-per forwarded function (`kv_store_get`, `app_session_greet`, ...). Each defaults to
-a generated forwarding function (`forward::kv_store::get`) that an override can
+per forwarded function (`example_rec_kv_store_get`, `example_rec_app_session_greet`, ...). Each defaults to
+a generated forwarding function (`forward::example_rec_kv_store::get`) that an override can
 call. The generated impls run `before` and `after` around it.
 `examples/record/interceptor` and the `overridden_hooks_change_behaviour` test
 cover it: a hidden key never reaches the host, and a decorated guest result is

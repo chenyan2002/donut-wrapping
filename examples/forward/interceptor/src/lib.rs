@@ -19,20 +19,20 @@ impl forward::Hooks for Interceptor {
     }
 
     // The app's `store.get` (guest → host): hide one key.
-    fn kv_store_get(this: &forward::FwdKvStore, key: String) -> Option<String> {
+    fn example_rec_kv_store_get(this: &forward::FwdExampleRecKvStore, key: String) -> Option<String> {
         if key == "visits" {
             None
         } else {
-            forward::kv_store::get(this, key)
+            forward::example_rec_kv_store::get(this, key)
         }
     }
 
     // The host's `session.greet` (host → guest): decorate the guest's answer.
-    fn app_session_greet(
-        this: &forward::FwdAppSession,
+    fn example_rec_app_session_greet(
+        this: &forward::FwdExampleRecAppSession,
         s: &example::rec::kv::Store,
     ) -> String {
-        format!("{} [intercepted]", forward::app_session::greet(this, s))
+        format!("{} [intercepted]", forward::example_rec_app_session::greet(this, s))
     }
 }
 

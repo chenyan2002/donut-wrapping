@@ -2163,8 +2163,8 @@ pub mod forward {
     }
 
     /// The guest's `store`: a host `store`, owned or lent for one call.
-    pub struct FwdKvStore { inner: Option<crate::example::rec::kv::Store>, lent: bool }
-    impl FwdKvStore {
+    pub struct FwdExampleRecKvStore { inner: Option<crate::example::rec::kv::Store>, lent: bool }
+    impl FwdExampleRecKvStore {
         pub fn owned(h: crate::example::rec::kv::Store) -> Self { Self { inner: Some(h), lent: false } }
         /// Lends a host `store` to the guest for the duration of one call.
         pub fn lend(h: &crate::example::rec::kv::Store) -> crate::exports::virtual_example::rec::kv::Store {
@@ -2178,7 +2178,7 @@ pub mod forward {
             self.inner.take().unwrap()
         }
     }
-    impl Drop for FwdKvStore {
+    impl Drop for FwdExampleRecKvStore {
         fn drop(&mut self) {
             if let Some(h) = self.inner.take() {
                 if self.lent {
@@ -2190,75 +2190,75 @@ pub mod forward {
         }
     }
     impl crate::exports::virtual_example::rec::kv::Guest for crate::Recorder {
-        type Store = FwdKvStore;
+        type Store = FwdExampleRecKvStore;
         fn open(p0: String, ) -> crate::exports::virtual_example::rec::kv::Store {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "open" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p0]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_open(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_open(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle("store"));
 ret
         }
         fn open_all(p0: Vec<String>, ) -> Vec<crate::exports::virtual_example::rec::kv::Store> {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "open-all" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p0]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_open_all(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_open_all(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle(".."));
 ret
         }
         fn open_pair(p0: String, p1: String, ) -> crate::exports::virtual_example::rec::kv::Pair {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "open-pair" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p0, &p1]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_open_pair(p0, p1);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_open_pair(p0, p1);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle(".."));
 ret
         }
         fn find(p0: String, ) -> crate::exports::virtual_example::rec::kv::Lookup {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "find" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p0]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_find(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_find(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle(".."));
 ret
         }
         fn dump(p0: crate::exports::virtual_example::rec::kv::View<'_>, ) -> Vec<crate::exports::virtual_example::rec::kv::Entry> {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "dump" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle("..")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_dump(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_dump(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
         fn count(p0: Vec<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, p1: Option<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, ) -> u32 {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "count" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle(".."), &crate::forward::Handle("..")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_count(p0, p1);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_count(p0, p1);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
     }
-    impl crate::exports::virtual_example::rec::kv::GuestStore for FwdKvStore {
+    impl crate::exports::virtual_example::rec::kv::GuestStore for FwdExampleRecKvStore {
         fn set(&self, p1: String, p2: String, ) {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "[method]store.set" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p1, &p2]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_store_set(self, p1, p2);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_store_set(self, p1, p2);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
         fn get(&self, p1: String, ) -> Option<String> {
 let call = crate::forward::Call { direction: crate::forward::Direction::Import, interface: "example:rec/kv", function: "[method]store.get" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p1]);
-let ret = <crate::Recorder as crate::forward::Hooks>::kv_store_get(self, p1);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_kv_store_get(self, p1);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
     }
 
     /// Our `session`: wraps the guest's.
-    pub struct FwdAppSession { inner: Option<crate::guest::example::rec::app::Session> }
-    impl FwdAppSession {
+    pub struct FwdExampleRecAppSession { inner: Option<crate::guest::example::rec::app::Session> }
+    impl FwdExampleRecAppSession {
         pub fn wrap(g: crate::guest::example::rec::app::Session) -> Self { Self { inner: Some(g) } }
         pub fn guest(&self) -> &crate::guest::example::rec::app::Session { self.inner.as_ref().unwrap() }
         pub fn into_guest(mut self) -> crate::guest::example::rec::app::Session { self.inner.take().unwrap() }
     }
-    impl Drop for FwdAppSession {
+    impl Drop for FwdExampleRecAppSession {
         fn drop(&mut self) {
             if self.inner.take().is_some() {
                 <crate::Recorder as Hooks>::dropped(Direction::Export, "example:rec/app", "session");
@@ -2266,108 +2266,108 @@ ret
         }
     }
     impl crate::exports::example::rec::app::Guest for crate::Recorder {
-        type Session = FwdAppSession;
+        type Session = FwdExampleRecAppSession;
         fn run(p0: &crate::example::rec::kv::Store, ) -> String {
 let call = crate::forward::Call { direction: crate::forward::Direction::Export, interface: "example:rec/app", function: "run" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle("store")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::app_run(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_app_run(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
         fn summarize(p0: crate::exports::example::rec::app::View<'_>, ) -> crate::exports::example::rec::app::Report {
 let call = crate::forward::Call { direction: crate::forward::Direction::Export, interface: "example:rec/app", function: "summarize" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle("..")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::app_summarize(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_app_summarize(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle(".."));
 ret
         }
         fn tally(p0: &crate::example::rec::kv::Store, p1: Option<&crate::example::rec::kv::Store>, ) -> u32 {
 let call = crate::forward::Call { direction: crate::forward::Direction::Export, interface: "example:rec/app", function: "tally" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle("store"), &crate::forward::Handle("..")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::app_tally(p0, p1);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_app_tally(p0, p1);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
     }
-    impl crate::exports::example::rec::app::GuestSession for FwdAppSession {
+    impl crate::exports::example::rec::app::GuestSession for FwdExampleRecAppSession {
         fn new(p0: String, ) -> Self {
 let call = crate::forward::Call { direction: crate::forward::Direction::Export, interface: "example:rec/app", function: "[constructor]session" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&p0]);
-let ret = <crate::Recorder as crate::forward::Hooks>::app_session_new(p0);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_app_session_new(p0);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &crate::forward::Handle("session"));
 ret
         }
         fn greet(&self, p1: &crate::example::rec::kv::Store, ) -> String {
 let call = crate::forward::Call { direction: crate::forward::Direction::Export, interface: "example:rec/app", function: "[method]session.greet" };
 <crate::Recorder as crate::forward::Hooks>::before(&call, &[&crate::forward::Handle("store")]);
-let ret = <crate::Recorder as crate::forward::Hooks>::app_session_greet(self, p1);
+let ret = <crate::Recorder as crate::forward::Hooks>::example_rec_app_session_greet(self, p1);
 <crate::Recorder as crate::forward::Hooks>::after(&call, &ret);
 ret
         }
     }
     /// The default (forwarding) behaviour, which `Hooks` overrides can call.
-    pub mod kv {
+    pub mod example_rec_kv {
         pub fn open(p0: String, ) -> crate::exports::virtual_example::rec::kv::Store {
 let ret = crate::example::rec::kv::open(crate::forward::Arg::arg(&p0));
-crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdKvStore::owned(ret))
+crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdExampleRecKvStore::owned(ret))
         }
         pub fn open_all(p0: Vec<String>, ) -> Vec<crate::exports::virtual_example::rec::kv::Store> {
 let ret = crate::example::rec::kv::open_all(crate::forward::Arg::arg(&p0));
-ret.into_iter().map(|v| crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdKvStore::owned(v))).collect::<Vec<_>>()
+ret.into_iter().map(|v| crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdExampleRecKvStore::owned(v))).collect::<Vec<_>>()
         }
         pub fn open_pair(p0: String, p1: String, ) -> crate::exports::virtual_example::rec::kv::Pair {
 let ret = crate::example::rec::kv::open_pair(crate::forward::Arg::arg(&p0), crate::forward::Arg::arg(&p1));
-crate::exports::virtual_example::rec::kv::Pair { first: crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdKvStore::owned(ret.first)), second: crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdKvStore::owned(ret.second)) }
+crate::exports::virtual_example::rec::kv::Pair { first: crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdExampleRecKvStore::owned(ret.first)), second: crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdExampleRecKvStore::owned(ret.second)) }
         }
         pub fn find(p0: String, ) -> crate::exports::virtual_example::rec::kv::Lookup {
 let ret = crate::example::rec::kv::find(crate::forward::Arg::arg(&p0));
-match ret { crate::example::rec::kv::Lookup::Missing => crate::exports::virtual_example::rec::kv::Lookup::Missing, crate::example::rec::kv::Lookup::Found(v) => crate::exports::virtual_example::rec::kv::Lookup::Found(crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdKvStore::owned(v))) }
+match ret { crate::example::rec::kv::Lookup::Missing => crate::exports::virtual_example::rec::kv::Lookup::Missing, crate::example::rec::kv::Lookup::Found(v) => crate::exports::virtual_example::rec::kv::Lookup::Found(crate::exports::virtual_example::rec::kv::Store::new(crate::forward::FwdExampleRecKvStore::owned(v))) }
         }
         pub fn dump(p0: crate::exports::virtual_example::rec::kv::View<'_>, ) -> Vec<crate::exports::virtual_example::rec::kv::Entry> {
-let ret = crate::example::rec::kv::dump(&crate::example::rec::kv::View { s: p0.s.get::<crate::forward::FwdKvStore>().host(), prefix: p0.prefix });
+let ret = crate::example::rec::kv::dump(&crate::example::rec::kv::View { s: p0.s.get::<crate::forward::FwdExampleRecKvStore>().host(), prefix: p0.prefix });
 ret
         }
         pub fn count(p0: Vec<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, p1: Option<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, ) -> u32 {
-let ret = crate::example::rec::kv::count(&p0.into_iter().map(|v| v.get::<crate::forward::FwdKvStore>().host()).collect::<Vec<_>>(), p1.map(|v| v.get::<crate::forward::FwdKvStore>().host()));
+let ret = crate::example::rec::kv::count(&p0.into_iter().map(|v| v.get::<crate::forward::FwdExampleRecKvStore>().host()).collect::<Vec<_>>(), p1.map(|v| v.get::<crate::forward::FwdExampleRecKvStore>().host()));
 ret
         }
     }
     /// The default (forwarding) behaviour, which `Hooks` overrides can call.
-    pub mod kv_store {
-        pub fn set(this: &crate::forward::FwdKvStore, p1: String, p2: String, ) {
+    pub mod example_rec_kv_store {
+        pub fn set(this: &crate::forward::FwdExampleRecKvStore, p1: String, p2: String, ) {
 this.host().set(crate::forward::Arg::arg(&p1), crate::forward::Arg::arg(&p2));
         }
-        pub fn get(this: &crate::forward::FwdKvStore, p1: String, ) -> Option<String> {
+        pub fn get(this: &crate::forward::FwdExampleRecKvStore, p1: String, ) -> Option<String> {
 let ret = this.host().get(crate::forward::Arg::arg(&p1));
 ret
         }
     }
     /// The default (forwarding) behaviour, which `Hooks` overrides can call.
-    pub mod app {
+    pub mod example_rec_app {
         pub fn run(p0: &crate::example::rec::kv::Store, ) -> String {
-let lent0 = crate::forward::FwdKvStore::lend(p0);
+let lent0 = crate::forward::FwdExampleRecKvStore::lend(p0);
 let ret = crate::guest::example::rec::app::run(&lent0);
 ret
         }
         pub fn summarize(p0: crate::exports::example::rec::app::View<'_>, ) -> crate::exports::example::rec::app::Report {
-let lent0 = crate::forward::FwdKvStore::lend(p0.s);
+let lent0 = crate::forward::FwdExampleRecKvStore::lend(p0.s);
 let ret = crate::guest::example::rec::app::summarize(&crate::guest::example::rec::kv::View { s: &lent0, prefix: p0.prefix });
-crate::exports::example::rec::app::Report { lines: ret.lines, kept: crate::example::rec::kv::Pair { first: ret.kept.first.into_inner::<crate::forward::FwdKvStore>().into_host(), second: ret.kept.second.into_inner::<crate::forward::FwdKvStore>().into_host() } }
+crate::exports::example::rec::app::Report { lines: ret.lines, kept: crate::example::rec::kv::Pair { first: ret.kept.first.into_inner::<crate::forward::FwdExampleRecKvStore>().into_host(), second: ret.kept.second.into_inner::<crate::forward::FwdExampleRecKvStore>().into_host() } }
         }
         pub fn tally(p0: &crate::example::rec::kv::Store, p1: Option<&crate::example::rec::kv::Store>, ) -> u32 {
-let lent0 = crate::forward::FwdKvStore::lend(p0);
-let lent1 = p1.map(|h| crate::forward::FwdKvStore::lend(h));
+let lent0 = crate::forward::FwdExampleRecKvStore::lend(p0);
+let lent1 = p1.map(|h| crate::forward::FwdExampleRecKvStore::lend(h));
 let ret = crate::guest::example::rec::app::tally(&lent0, lent1.as_ref());
 ret
         }
     }
     /// The default (forwarding) behaviour, which `Hooks` overrides can call.
-    pub mod app_session {
-        pub fn new(p0: String, ) -> crate::forward::FwdAppSession {
-crate::forward::FwdAppSession::wrap(crate::guest::example::rec::app::Session::new(crate::forward::Arg::arg(&p0)))
+    pub mod example_rec_app_session {
+        pub fn new(p0: String, ) -> crate::forward::FwdExampleRecAppSession {
+crate::forward::FwdExampleRecAppSession::wrap(crate::guest::example::rec::app::Session::new(crate::forward::Arg::arg(&p0)))
         }
-        pub fn greet(this: &crate::forward::FwdAppSession, p1: &crate::example::rec::kv::Store, ) -> String {
-let lent0 = crate::forward::FwdKvStore::lend(p1);
+        pub fn greet(this: &crate::forward::FwdExampleRecAppSession, p1: &crate::example::rec::kv::Store, ) -> String {
+let lent0 = crate::forward::FwdExampleRecKvStore::lend(p1);
 let ret = this.guest().greet(&lent0);
 ret
         }
@@ -2385,32 +2385,32 @@ ret
         fn after(call: &Call, ret: &dyn Debug) {}
         /// A forwarded resource was dropped by whoever owned it.
         fn dropped(direction: Direction, interface: &'static str, resource: &'static str) {}
-        /// `open` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::open`).
-        fn kv_open(p0: String, ) -> crate::exports::virtual_example::rec::kv::Store { crate::forward::kv::open(p0) }
-        /// `open-all` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::open_all`).
-        fn kv_open_all(p0: Vec<String>, ) -> Vec<crate::exports::virtual_example::rec::kv::Store> { crate::forward::kv::open_all(p0) }
-        /// `open-pair` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::open_pair`).
-        fn kv_open_pair(p0: String, p1: String, ) -> crate::exports::virtual_example::rec::kv::Pair { crate::forward::kv::open_pair(p0, p1) }
-        /// `find` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::find`).
-        fn kv_find(p0: String, ) -> crate::exports::virtual_example::rec::kv::Lookup { crate::forward::kv::find(p0) }
-        /// `dump` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::dump`).
-        fn kv_dump(p0: crate::exports::virtual_example::rec::kv::View<'_>, ) -> Vec<crate::exports::virtual_example::rec::kv::Entry> { crate::forward::kv::dump(p0) }
-        /// `count` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv::count`).
-        fn kv_count(p0: Vec<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, p1: Option<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, ) -> u32 { crate::forward::kv::count(p0, p1) }
-        /// `[method]store.set` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv_store::set`).
-        fn kv_store_set(this: &crate::forward::FwdKvStore, p1: String, p2: String, ) { crate::forward::kv_store::set(this, p1, p2) }
-        /// `[method]store.get` in `example:rec/kv`. Defaults to forwarding (`crate::forward::kv_store::get`).
-        fn kv_store_get(this: &crate::forward::FwdKvStore, p1: String, ) -> Option<String> { crate::forward::kv_store::get(this, p1) }
-        /// `run` in `example:rec/app`. Defaults to forwarding (`crate::forward::app::run`).
-        fn app_run(p0: &crate::example::rec::kv::Store, ) -> String { crate::forward::app::run(p0) }
-        /// `summarize` in `example:rec/app`. Defaults to forwarding (`crate::forward::app::summarize`).
-        fn app_summarize(p0: crate::exports::example::rec::app::View<'_>, ) -> crate::exports::example::rec::app::Report { crate::forward::app::summarize(p0) }
-        /// `tally` in `example:rec/app`. Defaults to forwarding (`crate::forward::app::tally`).
-        fn app_tally(p0: &crate::example::rec::kv::Store, p1: Option<&crate::example::rec::kv::Store>, ) -> u32 { crate::forward::app::tally(p0, p1) }
-        /// `[constructor]session` in `example:rec/app`. Defaults to forwarding (`crate::forward::app_session::new`).
-        fn app_session_new(p0: String, ) -> crate::forward::FwdAppSession { crate::forward::app_session::new(p0) }
-        /// `[method]session.greet` in `example:rec/app`. Defaults to forwarding (`crate::forward::app_session::greet`).
-        fn app_session_greet(this: &crate::forward::FwdAppSession, p1: &crate::example::rec::kv::Store, ) -> String { crate::forward::app_session::greet(this, p1) }
+        /// `open` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::open`).
+        fn example_rec_kv_open(p0: String, ) -> crate::exports::virtual_example::rec::kv::Store { crate::forward::example_rec_kv::open(p0) }
+        /// `open-all` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::open_all`).
+        fn example_rec_kv_open_all(p0: Vec<String>, ) -> Vec<crate::exports::virtual_example::rec::kv::Store> { crate::forward::example_rec_kv::open_all(p0) }
+        /// `open-pair` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::open_pair`).
+        fn example_rec_kv_open_pair(p0: String, p1: String, ) -> crate::exports::virtual_example::rec::kv::Pair { crate::forward::example_rec_kv::open_pair(p0, p1) }
+        /// `find` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::find`).
+        fn example_rec_kv_find(p0: String, ) -> crate::exports::virtual_example::rec::kv::Lookup { crate::forward::example_rec_kv::find(p0) }
+        /// `dump` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::dump`).
+        fn example_rec_kv_dump(p0: crate::exports::virtual_example::rec::kv::View<'_>, ) -> Vec<crate::exports::virtual_example::rec::kv::Entry> { crate::forward::example_rec_kv::dump(p0) }
+        /// `count` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv::count`).
+        fn example_rec_kv_count(p0: Vec<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, p1: Option<crate::exports::virtual_example::rec::kv::StoreBorrow<'_>>, ) -> u32 { crate::forward::example_rec_kv::count(p0, p1) }
+        /// `[method]store.set` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv_store::set`).
+        fn example_rec_kv_store_set(this: &crate::forward::FwdExampleRecKvStore, p1: String, p2: String, ) { crate::forward::example_rec_kv_store::set(this, p1, p2) }
+        /// `[method]store.get` in `example:rec/kv`. Defaults to forwarding (`crate::forward::example_rec_kv_store::get`).
+        fn example_rec_kv_store_get(this: &crate::forward::FwdExampleRecKvStore, p1: String, ) -> Option<String> { crate::forward::example_rec_kv_store::get(this, p1) }
+        /// `run` in `example:rec/app`. Defaults to forwarding (`crate::forward::example_rec_app::run`).
+        fn example_rec_app_run(p0: &crate::example::rec::kv::Store, ) -> String { crate::forward::example_rec_app::run(p0) }
+        /// `summarize` in `example:rec/app`. Defaults to forwarding (`crate::forward::example_rec_app::summarize`).
+        fn example_rec_app_summarize(p0: crate::exports::example::rec::app::View<'_>, ) -> crate::exports::example::rec::app::Report { crate::forward::example_rec_app::summarize(p0) }
+        /// `tally` in `example:rec/app`. Defaults to forwarding (`crate::forward::example_rec_app::tally`).
+        fn example_rec_app_tally(p0: &crate::example::rec::kv::Store, p1: Option<&crate::example::rec::kv::Store>, ) -> u32 { crate::forward::example_rec_app::tally(p0, p1) }
+        /// `[constructor]session` in `example:rec/app`. Defaults to forwarding (`crate::forward::example_rec_app_session::new`).
+        fn example_rec_app_session_new(p0: String, ) -> crate::forward::FwdExampleRecAppSession { crate::forward::example_rec_app_session::new(p0) }
+        /// `[method]session.greet` in `example:rec/app`. Defaults to forwarding (`crate::forward::example_rec_app_session::greet`).
+        fn example_rec_app_session_greet(this: &crate::forward::FwdExampleRecAppSession, p1: &crate::example::rec::kv::Store, ) -> String { crate::forward::example_rec_app_session::greet(this, p1) }
     }
 }
 

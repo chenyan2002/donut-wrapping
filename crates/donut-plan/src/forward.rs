@@ -49,15 +49,17 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
         shared: plan.world_b_shared_types(),
         v2h_iface: plan.forward_virtual.iter().copied().collect(),
         virtual_copies: plan.virtual_exports.iter().copied().collect(),
+        names: short_names(plan)?,
         defaults: Default::default(),
         hook_methods: String::new(),
+        root: String::new(),
         out: String::new(),
     };
     for (v, h) in plan.forward_virtual.iter() {
         for (name, ty) in resolve.interfaces[*v].types.iter() {
             if matches!(resolve.types[*ty].kind, TypeDefKind::Resource) {
                 let host_ty = resolve.interfaces[*h].types[name];
-                let wrapper = format!("Fwd{}{}", camel(iface_name(resolve, *h)), camel(name));
+                let wrapper = format!("Fwd{}{}", camel(&g.names[h]), camel(name));
                 g.virt.insert(*ty, (host_ty, wrapper.clone()));
                 g.host.insert(host_ty, (*ty, wrapper));
             }
@@ -66,7 +68,7 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
     for e in plan.forward_exports.iter() {
         for (name, ty) in resolve.interfaces[*e].types.iter() {
             if matches!(resolve.types[*ty].kind, TypeDefKind::Resource) {
-                let wrapper = format!("Fwd{}{}", camel(iface_name(resolve, *e)), camel(name));
+                let wrapper = format!("Fwd{}{}", camel(&g.names[e]), camel(name));
                 g.export_res.insert(*ty, wrapper);
             }
         }
@@ -79,12 +81,45 @@ pub(crate) fn generate(plan: &Plan, hooks: &str) -> Result<String> {
     for e in plan.forward_exports.iter() {
         g.export_interface(*e)?;
     }
+    for m in plan.mock_virtual.iter() {
+        g.mock_interface(m.export, &m.name, &m.state)?;
+    }
     g.finish()?;
-    Ok(g.out)
+    Ok(g.root + &g.out)
 }
 
-fn iface_name(resolve: &Resolve, id: InterfaceId) -> &str {
-    resolve.interfaces[id].name.as_deref().unwrap()
+/// The name each forwarded or mocked interface goes by in `forward::` (its
+/// default module, wrapper, and hook names): `<namespace>-<package>-<interface>`,
+/// e.g. `example-http-types`, so that names never depend on what else is
+/// forwarded. Virtual copies (`virtual-<namespace>`) use the original's name.
+fn short_names(plan: &Plan) -> Result<BTreeMap<InterfaceId, String>> {
+    let resolve = &plan.resolve;
+    let ids = plan
+        .forward_virtual
+        .iter()
+        .map(|(_, h)| *h)
+        .chain(plan.forward_exports.iter().copied())
+        .chain(plan.mock_virtual.iter().map(|m| m.export));
+    let mut names = BTreeMap::new();
+    let mut seen = BTreeMap::new();
+    for id in ids {
+        let iface = &resolve.interfaces[id];
+        let pkg = &resolve.packages[iface.package.unwrap()].name;
+        let ns = pkg.namespace.strip_prefix("virtual-").unwrap_or(&pkg.namespace);
+        let name = format!("{ns}-{}-{}", pkg.name, iface.name.as_deref().unwrap());
+        if let Some(other) = seen.insert(name.clone(), id) {
+            if other != id {
+                bail!(
+                    "`{}` and `{}` would both generate `forward::` items named `{name}`; \
+                     forward or mock only one version",
+                    resolve.id_of(other).unwrap(),
+                    resolve.id_of(id).unwrap(),
+                );
+            }
+        }
+        names.insert(id, name);
+    }
+    Ok(names)
 }
 
 struct Gen<'a> {
@@ -92,6 +127,8 @@ struct Gen<'a> {
     hooks: String,
     /// Interfaces World A exports (as opposed to imports).
     exported: BTreeSet<InterfaceId>,
+    /// `forward::` names of forwarded and mocked interfaces (`short_names`).
+    names: BTreeMap<InterfaceId, String>,
     /// Virtual (guest-side) resource → (host resource, wrapper name).
     virt: BTreeMap<TypeId, (TypeId, String)>,
     /// Host resource → (virtual resource, wrapper name).
@@ -108,6 +145,8 @@ struct Gen<'a> {
     defaults: indexmap::IndexMap<String, String>,
     /// `Hooks` methods, one per forwarded function.
     hook_methods: String,
+    /// Items at the crate root (mock state type aliases).
+    root: String,
     out: String,
 }
 
@@ -503,9 +542,8 @@ pub mod forward {
             && self.virtual_copies.contains(&self.owner(r)?)
         {
             bail!(
-                "forward: `{}` uses resource `{}`, whose interface is virtualized but not \
-                 forwarded; forward it too",
-                "a forwarded interface",
+                "forward: a forwarded function uses resource `{}`, whose interface is \
+                 virtualized but not forwarded; forward it too",
                 self.resource_name(r)
             );
         }
@@ -744,10 +782,17 @@ pub mod forward {
             None
         };
 
-        // The default forwarding function.
+        // The default forwarding function (or, mocked, `unimplemented!()`).
         let mut body = f.lets.clone();
         let call = format!("{}({})", f.callee, f.args.join(", "));
         match (&func.kind, &func.result) {
+            _ if f.unimplemented => {
+                writeln!(
+                    body,
+                    "unimplemented!(\"`{}` in `{}` is mocked but not implemented: override `Hooks::{hook}`\")",
+                    func.name, f.iface
+                )?;
+            }
             (FunctionKind::Constructor(_), _) => {
                 writeln!(body, "crate::forward::{}({call})", f.constructor_wrap.as_deref().unwrap())?;
             }
@@ -833,7 +878,7 @@ pub mod forward {
     /// calling the host's `h`.
     fn virtual_interface(&mut self, v: InterfaceId, h: InterfaceId) -> Result<()> {
         let iface = self.resolve.id_of(h).unwrap();
-        let module = to_rust_ident(iface_name(self.resolve, h));
+        let module = to_rust_ident(&self.names[&h]);
         let vpath = self.iface_path(v);
         let hpath = self.iface_path(h);
         let resolve = self.resolve;
@@ -863,6 +908,7 @@ pub mod forward {
                 lets,
                 convert_ret: &|g, t, e| g.convert_result(t, e, Conv::HostToVirt),
                 constructor_wrap: None,
+                unimplemented: false,
             })?;
         }
         writeln!(self.out, "    }}")?;
@@ -892,6 +938,7 @@ pub mod forward {
                     lets,
                     convert_ret: &|g, t, e| g.convert_result(t, e, Conv::HostToVirt),
                     constructor_wrap: Some(format!("{w}::owned")),
+                    unimplemented: false,
                 })?;
             }
             writeln!(self.out, "    }}")?;
@@ -925,7 +972,7 @@ pub mod forward {
     /// A forwarded export `e`, implemented by calling the guest's `e`.
     fn export_interface(&mut self, e: InterfaceId) -> Result<()> {
         let iface = self.resolve.id_of(e).unwrap();
-        let module = to_rust_ident(iface_name(self.resolve, e));
+        let module = to_rust_ident(&self.names[&e]);
         let epath = self.iface_path(e);
         let gpath = self.guest_path(e);
         let resolve = self.resolve;
@@ -955,6 +1002,7 @@ pub mod forward {
                 lets,
                 convert_ret: &|g, t, e| g.convert_result(t, e, Conv::GuestToHost),
                 constructor_wrap: None,
+                unimplemented: false,
             })?;
         }
         writeln!(self.out, "    }}")?;
@@ -984,10 +1032,124 @@ pub mod forward {
                     lets,
                     convert_ret: &|g, t, e| g.convert_result(t, e, Conv::GuestToHost),
                     constructor_wrap: Some(format!("{w}::wrap")),
+                    unimplemented: false,
                 })?;
             }
             writeln!(self.out, "    }}")?;
         }
+        Ok(())
+    }
+
+    /// A mocked virtual interface `v` (the guest imports it as `iface`):
+    /// generated trait impls whose hooks default to `unimplemented!()`, and
+    /// resources whose rep is whatever state the overrides put in.
+    fn mock_interface(&mut self, v: InterfaceId, iface: &str, state: &BTreeMap<String, String>) -> Result<()> {
+        let module = to_rust_ident(&self.names[&v]);
+        let vpath = self.iface_path(v);
+        let resolve = self.resolve;
+        let resources = self.resources(v);
+        let mut wrappers = BTreeMap::new();
+        for (name, r) in resources.iter() {
+            let w = format!("Mock{}{}", camel(&self.names[&v]), camel(name));
+            self.mock_wrapper(&w, name, iface, state.get(name).map(|s| s.as_str()))?;
+            wrappers.insert(*r, w);
+        }
+        // Interfaces with neither functions nor resources have no trait.
+        if resources.is_empty() && resolve.interfaces[v].functions.is_empty() {
+            return Ok(());
+        }
+
+        writeln!(self.out, "    impl {vpath}::Guest for {} {{", self.hooks)?;
+        for (name, r) in resources.iter() {
+            writeln!(self.out, "        type {} = {};", camel(name), wrappers[r])?;
+        }
+        for func in resolve.interfaces[v].functions.values() {
+            if func.kind.resource().is_some() {
+                continue;
+            }
+            self.function(Fwd {
+                func,
+                dir: Dir::Import,
+                iface: iface.to_string(),
+                module: module.clone(),
+                wrapper: None,
+                callee: String::new(),
+                args: Vec::new(),
+                lets: String::new(),
+                convert_ret: &|_, _, e| Ok(e.to_string()),
+                constructor_wrap: None,
+                unimplemented: true,
+            })?;
+        }
+        writeln!(self.out, "    }}")?;
+
+        for (name, r) in resources.iter() {
+            let w = wrappers[r].clone();
+            writeln!(self.out, "    impl {vpath}::Guest{} for {w} {{", camel(name))?;
+            for func in resolve.interfaces[v].functions.values() {
+                if func.kind.resource() != Some(*r) {
+                    continue;
+                }
+                self.function(Fwd {
+                    func,
+                    dir: Dir::Import,
+                    iface: iface.to_string(),
+                    module: format!("{module}_{}", to_rust_ident(name)),
+                    wrapper: Some(w.clone()),
+                    callee: String::new(),
+                    args: Vec::new(),
+                    lets: String::new(),
+                    convert_ret: &|_, _, e| Ok(e.to_string()),
+                    constructor_wrap: None,
+                    unimplemented: true,
+                })?;
+            }
+            writeln!(self.out, "    }}")?;
+        }
+        Ok(())
+    }
+
+    fn mock_wrapper(&mut self, w: &str, res: &str, iface: &str, state: Option<&str>) -> Result<()> {
+        let hooks = &self.hooks;
+        let Some(state) = state else {
+            // No state type: nothing can create one, so every function that
+            // would stays `unimplemented!()`.
+            write!(
+                self.out,
+                r#"
+    /// The guest's `{res}`, mocked without state: it can't be created. To
+    /// create one in a `Hooks` override, give `{res}` a state type in `mock`.
+    pub struct {w} {{ never: core::convert::Infallible }}
+"#
+            )?;
+            return Ok(());
+        };
+        // Aliased at the crate root, where the type was written.
+        let alias = format!("__Donut{w}State");
+        writeln!(self.root, "#[doc(hidden)]\n#[allow(non_camel_case_types)]\ntype {alias} = {state};")?;
+        write!(
+            self.out,
+            r#"
+    /// The guest's `{res}`, mocked: a `{state}`, with `Hooks::dropped`
+    /// called when the guest drops it.
+    pub struct {w} {{ state: Option<crate::{alias}> }}
+    impl {w} {{
+        pub fn new(state: crate::{alias}) -> Self {{ Self {{ state: Some(state) }} }}
+        pub fn into_inner(mut self) -> crate::{alias} {{ self.state.take().unwrap() }}
+    }}
+    impl core::ops::Deref for {w} {{
+        type Target = crate::{alias};
+        fn deref(&self) -> &crate::{alias} {{ self.state.as_ref().unwrap() }}
+    }}
+    impl Drop for {w} {{
+        fn drop(&mut self) {{
+            if self.state.is_some() {{
+                <{hooks} as Hooks>::dropped(Direction::Import, "{iface}", "{res}");
+            }}
+        }}
+    }}
+"#
+        )?;
         Ok(())
     }
 
@@ -1044,4 +1206,6 @@ struct Fwd<'a> {
     convert_ret: &'a dyn Fn(&Gen<'_>, &Type, &str) -> Result<String>,
     /// For constructors: wraps the new resource (`crate::forward::<this>`).
     constructor_wrap: Option<String>,
+    /// Mocked: the default is `unimplemented!()` instead of a call.
+    unimplemented: bool,
 }

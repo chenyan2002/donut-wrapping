@@ -15,15 +15,14 @@ downstream.
   `wasm-tools component wit rust.wasm --out-dir`, and flattened to one file per
   package. The guest world is `root:component/root`. `wit/host.wit` is the
   donut's world.
-* `host/src/fastly.rs` implements the 60 virtual functions. It was generated as
-  `unimplemented!()` stubs with:
-  ```
-  cargo run -p donut-plan --example expand -- examples/fastly/wit \
-    test:fastly-host/host root:component/root fastly:compute/types@0.1.0 ... > /tmp/x.rs
-  python3 tools/stubs.py /tmp/x.rs
-  ```
-  Then the 13 functions on the guest's path for a request (from proxy-component's
-  recorded `trace.out`) were filled in by hand.
+* `host/src/lib.rs` mocks all of `fastly:compute/*` with `mock:`. The 60 virtual
+  functions are generated, each defaulting to `unimplemented!()`. The host
+  overrides the 13 that this guest calls for a request (from proxy-component's
+  recorded `trace.out`) in its `forward::Hooks` impl, and logs every call in
+  `before`. The three resources the guest creates hold state types declared in
+  `mock` (`{ "fastly:compute/http-resp@0.1.0": { response: ResponseState } }`),
+  and each wrapper derefs to its state. The other resources have no state
+  type, so they can't be created.
 * `build.sh` builds `out/donut.wasm`. `GUEST` overrides the guest path
   (default `~/src/proxy-component/tests/rust.wasm`).
 * Tested by `crates/donut-tests` (`fastly_guest`). `/` gives the same 200 response

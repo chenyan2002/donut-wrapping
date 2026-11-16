@@ -7,7 +7,7 @@ with `docs/p2-donut-wrapping-astra.md` and reviewing
 * `DonutPlan` and the `donut!` macro (§4, this repo);
 * wit-component's donut mode and `wasm-tools component new --donut-guest` (§5).
 
-The examples (`examples/virtualize`, `examples/forward`, and `examples/fastly`, a mock
+The examples (`examples/secrets`, the README's example, `examples/virtualize`, `examples/forward`, and `examples/fastly`, a mock
 Fastly host around a real Fastly Compute guest) build with `donut!` and run on
 Wasmtime 49 in `cargo test -p donut-tests`. `spike/` is the hand-assembled golden
 output for §5.1. `docs/plan.md` has the status, the branches
@@ -197,8 +197,8 @@ decision (§10.1).
 ```
 crate::example::net::sockets            // host import (World A, normal)
 crate::wasi::clocks::monotonic_clock    // passthrough import (World A); also forwarded to guest
-crate::exports::example::http::types    // virtual resources: Guest, GuestRequest, Request, …
-crate::exports::example::http::outgoing // virtual `send`
+crate::exports::virtual_example::http::types    // virtual resources: Guest, GuestRequest, Request, …
+crate::exports::virtual_example::http::outgoing // virtual `send`
 crate::guest::example::http::handler    // guest's exports, called through the linkage table (World B)
 crate::Guest                            // donut's own root exports (`serve`)
 export!(...)                            // same as generate!
@@ -207,7 +207,7 @@ export!(...)                            // same as generate!
 ### 3.4 User code
 
 ```rust
-use exports::example::http::types::{self as vtypes, Request, Response};
+use exports::virtual_example::http::types::{self as vtypes, Request, Response};
 
 struct Server;
 
@@ -226,7 +226,7 @@ impl Guest for Server {
 }
 
 impl vtypes::Guest for Server { type Request = MyRequest; type Response = MyResponse; }
-impl exports::example::http::outgoing::Guest for Server {
+impl exports::virtual_example::http::outgoing::Guest for Server {
     fn send(r: Request) -> Response { /* uses example:net/sockets */ }
 }
 export!(Server);
@@ -261,20 +261,24 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
    `W.imports ∪ passthrough(G) ∪ {import X | X needed by a virtual interface's use-closure}`,
    `W.exports ∪ {export v | v ∈ virtual}`. A world may both import and export the same
    interface (needed when the donut wraps the real `example:http/types`).
-   **If `W` itself imports or exports a virtualized interface**, World A exports a
-   *renamed copy* of it for the guest, e.g. `virtual-example:rec/kv`. This happens,
-   for instance, in a recording donut whose world is the guest's. Without the copy,
-   `W`'s own exports would bind to the virtual interface rather than the host's:
-   wit-bindgen (`generate_nominal_type_ids`) and wit-component (`exports_used`) both
-   bind an export's dependencies to an export of the same interface. This is the
-   same reason proxy-component uses `wrapped-` names.
-   * DonutPlan makes the copy by merging a copy of the `Resolve` in which the
-     package is renamed.
-   * The copy's same-package dependencies are copies too, so they must be
-     virtualized as well.
+   **World A always exports a *renamed copy* of each virtualized interface** for the
+   guest, in a package `virtual-<ns>:<pkg>`, e.g. `virtual-example:rec/kv`. A copy
+   is required whenever `W` (or forwarding) also imports or exports the interface,
+   as in a recording donut whose world is the guest's. Without it, `W`'s own
+   exports would bind to the virtual interface rather than the host's: wit-bindgen
+   (`generate_nominal_type_ids`) and wit-component (`exports_used`) both bind an
+   export's dependencies to an export of the same interface. This is the same
+   reason proxy-component uses `wrapped-` names. Copying always, rather than only
+   on a collision, keeps the guest side's Rust paths (`exports::virtual_<ns>::…`)
+   independent of what else is listed.
+   * DonutPlan copies only the listed interfaces (`copy_interfaces`): their types
+     and functions are cloned, with references between copied interfaces pointing
+     to the copies, and everything else (including unlisted interfaces of the same
+     package) pointing to the originals. So a virtualized `outgoing` can use a
+     passthrough `types` even when `W` imports `outgoing`. An earlier version
+     merged a clone of the `Resolve` with the whole package renamed, which forced
+     same-package dependencies to be virtualized too.
    * The manifest maps each guest import to the donut export that implements it.
-   * Interfaces without a collision keep their names, so their paths stay
-     `exports::<ns>::…`.
 
    As implemented, World A and World B are written as WIT in a synthetic package and
    pushed into the `Resolve`, so wit-parser elaborates their dependencies:
@@ -292,7 +296,7 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
 
    **Remap resource types, never whole interfaces.** Use *type-level* `with` keys
    (`full_wit_type_name`, `crates/rust/src/lib.rs:1321`): each virtual resource
-   `example:http/types/request` ↦ `crate::exports::example::http::types::Request`, and
+   `example:http/types/request` ↦ `crate::exports::virtual_example::http::types::Request`, and
    each passthrough resource ↦ its World-A host binding. For own handles and direct
    borrows, the remapped type works as is: export-side resource structs have the same
    handle API as import-side ones (`from_handle`, `take_handle`, `handle`;
@@ -365,8 +369,7 @@ Input: `Resolve`, the outer world `W`, the guest world `G`, and the `virtualize`
      check an embedded guest against it. Hole mode needs it because there is no guest
      binary;
    * the virtualized guest imports, each as a pair: the guest's import name and the
-     name of the World-A export that implements it (the same name, or the renamed
-     copy from step 2). It must be explicit: when the donut wraps the real
+     name of the World-A export that implements it (the renamed copy from step 2). It must be explicit: when the donut wraps the real
      interface, World A both imports it and exports the copy.
 
    Everything else is derived by convention, so it isn't serialized:
@@ -532,12 +535,26 @@ is on for World A. Import calls go through a generated `forward::Arg` trait
 instead of re-encoding wit-bindgen's parameter conventions.
 `examples/forward/recorder` is the recorder written this way.
 
+**Mocking:** `mock: [..]` is the same machinery for guest imports with no host
+behind them. Generated trait impls call `Hooks` methods that default to
+`unimplemented!()`. Each resource gets a generated wrapper
+(`Mock<Ns><Pkg><Iface><Res>`) over the state type declared for it in `mock`
+(`{ "example:app/fs": { file: OpenFile } }`), with `new`, `into_inner`, and
+`Deref`; the type is aliased at the crate root, so it resolves as written. A
+resource without a declared type gets an uninhabited wrapper: it can't be
+created, which suits interfaces the guest imports but never reaches. (An
+earlier version held `Box<dyn Any>` state, checked by a downcast at run time.)
+`examples/fastly` and `examples/secrets` mock this way.
+
 **Per-method interception** (the `RHooks` idea above) is part of the same
 `forward::Hooks` trait. There's one method per forwarded function, named
-`<iface>_<fn>` or `<iface>_<resource>_<fn>` (e.g. `kv_store_get`,
-`app_session_greet`).
+`<ns>_<pkg>_<iface>_<fn>` or `<ns>_<pkg>_<iface>_<resource>_<fn>` (e.g.
+`example_rec_kv_store_get`, `example_rec_app_session_greet`). Names are always
+fully qualified, so they never depend on what else is forwarded (`wasi:http/types`
+and `example:http/types` can be forwarded together). Wrappers follow the same
+rule: `forward::FwdExampleRecKvStore`, `forward::MockFastlyComputeHttpReqRequest`.
 * Each defaults to forwarding, through a generated free function
-  (`forward::kv_store::get`) that an override can still call, like `super`.
+  (`forward::example_rec_kv_store::get`) that an override can still call, like `super`.
 * The generated trait impls call `before`, then the hook method, then `after`, so
   observation covers overridden methods too.
 * `examples/forward/interceptor` hides a key from the app and decorates one guest

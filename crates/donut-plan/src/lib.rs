@@ -5,8 +5,9 @@
 //! Given the donut's own world `W`, the guest's world `G`, and the set `V` of
 //! guest imports to virtualize, this produces:
 //!
-//! * **World A**: `W`, plus every guest import in `V` as an export, plus every
-//!   other guest import (a *passthrough*) as an import. Ordinary wit-bindgen
+//! * **World A**: `W`, plus every guest import in `V` as an export (a copy, in
+//!   a package renamed `virtual-<namespace>:<name>`), plus every other guest
+//!   import (a *passthrough*) as an import. Ordinary wit-bindgen
 //!   output, with a `component-type` section.
 //! * **World B**: the guest's exports, as imports. Generated with
 //!   `import_module_prefix: "[guest-export]"` and wrapped in `mod guest`. Its
@@ -44,8 +45,16 @@ pub struct Config {
     /// forwarded to the host's import of it. An export of both the donut's
     /// world and the guest is forwarded to the guest's. Requires `hooks`.
     pub forward: Vec<String>,
+    /// Guest imports to mock (design §6): virtualized, with generated trait
+    /// impls whose `forward::Hooks` methods default to `unimplemented!()`.
+    /// Override the ones the guest uses. Requires `hooks`.
+    pub mock: Vec<String>,
+    /// For mocked interfaces, the Rust type of each resource's state:
+    /// interface → resource (its WIT name) → type, written as at the crate
+    /// root. A mocked resource without a type can't be created.
+    pub mock_types: BTreeMap<String, BTreeMap<String, String>>,
     /// The Rust type (at the crate root) that implements `forward::Hooks` and
-    /// receives the generated forwarding impls.
+    /// receives the generated forwarding and mock impls.
     pub hooks: Option<String>,
     /// wit-bindgen options for World A. `generate_all` is always set, since
     /// passthrough imports need bindings.
@@ -77,6 +86,19 @@ pub struct Plan {
     pub forward_virtual: Vec<(InterfaceId, InterfaceId)>,
     /// Forwarded exports (of both World A and the guest).
     pub forward_exports: Vec<InterfaceId>,
+    /// Mocked virtual interfaces.
+    pub mock_virtual: Vec<Mocked>,
+}
+
+/// A mocked virtual interface.
+#[derive(Debug)]
+pub struct Mocked {
+    /// World A's export (the virtual copy).
+    pub export: InterfaceId,
+    /// The guest's name for it, e.g. `example:app/fs`.
+    pub name: String,
+    /// Resource (WIT name) → the Rust type of its state.
+    pub state: BTreeMap<String, String>,
 }
 
 /// Generated Rust source plus the manifest it embeds.
@@ -107,10 +129,28 @@ impl Plan {
             .map(|k| resolve.name_world_key(k))
             .collect::<BTreeSet<_>>();
         let forwarded = config.forward.iter().collect::<BTreeSet<_>>();
+        for name in config.virtualize.iter() {
+            if forwarded.contains(name) || config.mock.contains(name) {
+                bail!(
+                    "`{name}` is in `virtualize` and in `{}`: list it once (`virtualize` \
+                     means you implement it, `forward` and `mock` generate the implementation)",
+                    if forwarded.contains(name) { "forward" } else { "mock" }
+                );
+            }
+        }
+        for name in config.mock.iter() {
+            if !guest_imports.contains(name) {
+                bail!("`{name}` in `mock` is not an interface imported by `{}`", config.guest);
+            }
+            if forwarded.contains(name) {
+                bail!("`{name}` can't be both forwarded and mocked");
+            }
+        }
         let wanted = config
             .virtualize
             .iter()
             .chain(config.forward.iter().filter(|f| guest_imports.contains(*f)))
+            .chain(config.mock.iter())
             .collect::<BTreeSet<_>>();
         let mut virtualized = Vec::new();
         let mut passthrough = Vec::new();
@@ -160,61 +200,44 @@ impl Plan {
             }
         }
 
-        // 2b. If the donut's own world also imports or exports a virtualized
-        // interface (e.g. a recording donut whose world is the guest's), World
-        // A can't export that interface for the guest as well: the donut's own
-        // exports would then bind to the virtual copy rather than the host's,
-        // since wit-bindgen and wit-component bind an export's dependencies to
-        // exports. So export a renamed copy of its package instead. That's the
-        // same reason proxy-component uses `wrapped-` names.
-        let w = &resolve.worlds[outer];
-        let mut virtual_exports = virtualized.clone();
-        // Forwarded virtual interfaces always collide: World A imports the
-        // host's to forward to it.
-        let conflicting = virtualized
-            .iter()
-            .filter(|id| {
-                let key = WorldKey::Interface(**id);
-                w.imports.contains_key(&key)
-                    || w.exports.contains_key(&key)
-                    || forwarded.contains(&resolve.id_of(**id).unwrap())
-            })
-            .map(|id| resolve.interfaces[*id].package.unwrap())
-            .collect::<BTreeSet<_>>();
-        for pkg in conflicting {
-            let mut copy = resolve.clone();
-            let old = copy.packages[pkg].name.clone();
-            let mut name = old.clone();
-            name.namespace = format!("virtual-{}", name.namespace);
-            copy.package_names.shift_remove(&old);
-            copy.packages[pkg].name = name.clone();
-            copy.package_names.insert(name.clone(), pkg);
-            resolve
-                .merge(copy)
-                .with_context(|| format!("copying `{old}` as `{name}`"))?;
-            let new_pkg = resolve.package_names[&name];
-            for (i, id) in virtualized.iter().enumerate() {
-                if resolve.interfaces[*id].package != Some(pkg) {
-                    continue;
+        // 2a. Likewise, a forwarded import can't mention a resource that's
+        // virtualized (or mocked) but not forwarded: there's no host resource
+        // behind it to pass on.
+        for f in virtualized.iter() {
+            let fname = resolve.id_of(*f).unwrap();
+            if !forwarded.contains(&fname) {
+                continue;
+            }
+            let mut live = LiveTypes::default();
+            live.add_interface(&resolve, *f);
+            for ty in live.iter() {
+                let def = &resolve.types[ty];
+                let TypeOwner::Interface(owner) = def.owner else { continue };
+                let oname = resolve.id_of(owner).unwrap();
+                if matches!(def.kind, TypeDefKind::Resource)
+                    && virtual_set.contains(&owner)
+                    && !forwarded.contains(&oname)
+                {
+                    bail!(
+                        "forwarded `{fname}` uses resource `{r}` of `{oname}`, which isn't \
+                         forwarded, so there's no host `{r}` to pass on: forward `{oname}` too, \
+                         or virtualize `{fname}` instead",
+                        r = def.name.as_deref().unwrap_or("?"),
+                    );
                 }
-                // The copy's same-package dependencies are copies too, so they
-                // must be virtualized as well.
-                for dep in resolve.interface_direct_deps(*id) {
-                    if resolve.interfaces[dep].package == Some(pkg) && !virtual_set.contains(&dep) {
-                        bail!(
-                            "virtualized `{}` uses `{}` from the same package, which must \
-                             then be virtualized too (the donut's own world uses `{}`, so \
-                             the guest's copy is a renamed package)",
-                            resolve.id_of(*id).unwrap(),
-                            resolve.id_of(dep).unwrap(),
-                            resolve.id_of(*id).unwrap(),
-                        );
-                    }
-                }
-                let iface = resolve.interfaces[*id].name.clone().unwrap();
-                virtual_exports[i] = resolve.packages[new_pkg].interfaces[&iface];
             }
         }
+
+        // 2b. World A exports, for the guest, a copy of each virtualized
+        // interface in a package renamed `virtual-<namespace>:<name>`, so
+        // that its name never collides with the interface itself, which the
+        // donut may also import (to forward to the host) or export. Always
+        // renaming keeps the guest side's Rust paths independent of what else
+        // is listed. Only the listed interfaces are copied: their uses of
+        // anything unlisted (including the rest of the package) still refer
+        // to the originals, which World A imports.
+        let copies = copy_interfaces(&mut resolve, &virtualized);
+        let virtual_exports = virtualized.iter().map(|id| copies[id]).collect::<Vec<_>>();
 
         let g = &resolve.worlds[guest];
         let mut guest_exports = Vec::new();
@@ -270,8 +293,31 @@ impl Plan {
                 ),
             }
         }
-        if !config.forward.is_empty() && config.hooks.is_none() {
-            bail!("`forward` needs `hooks`: the type that implements `forward::Hooks`");
+        if (!config.forward.is_empty() || !config.mock.is_empty()) && config.hooks.is_none() {
+            bail!("`forward` and `mock` need `hooks`: the type that implements `forward::Hooks`");
+        }
+        for name in config.mock_types.keys() {
+            if !config.mock.contains(name) {
+                bail!("`{name}` has mock state types but isn't in `mock`");
+            }
+        }
+        let mut mock_virtual = Vec::new();
+        for (id, export) in virtualized.iter().zip(virtual_exports.iter()) {
+            let name = resolve.id_of(*id).unwrap();
+            if !config.mock.contains(&name) {
+                continue;
+            }
+            let state = config.mock_types.get(&name).cloned().unwrap_or_default();
+            for res in state.keys() {
+                let is_resource = resolve.interfaces[*id]
+                    .types
+                    .get(res)
+                    .is_some_and(|t| matches!(resolve.types[*t].kind, TypeDefKind::Resource));
+                if !is_resource {
+                    bail!("`{name}` has no resource `{res}` to give a mock state type");
+                }
+            }
+            mock_virtual.push(Mocked { export: *export, name, state });
         }
         for id in virtual_exports.iter() {
             writeln!(wit, "  export {};", resolve.id_of(*id).unwrap())?;
@@ -298,6 +344,7 @@ impl Plan {
             guest_exports,
             forward_virtual,
             forward_exports,
+            mock_virtual,
         })
     }
 
@@ -331,7 +378,7 @@ impl Plan {
         let manifest = encode_manifest(&self.resolve, self.guest, &names)?;
 
         let mut source = world_a;
-        if forwarding {
+        if forwarding || !self.mock_virtual.is_empty() {
             let hooks = hooks.ok_or_else(|| anyhow::anyhow!("`forward` needs `hooks`"))?;
             source.push_str(&forward::generate(self, hooks).context("generating forwarding")?);
         }
@@ -548,6 +595,127 @@ fn module_path(resolve: &Resolve, id: InterfaceId, is_export: bool) -> String {
 }
 
 /// wit-bindgen's name for a type (`guest` is reserved for traits).
+/// Copies `ifaces` into packages renamed `virtual-<namespace>:<name>`
+/// (created as needed), returning original → copy. References between the
+/// copied interfaces point to the copies. Everything else they use (types of
+/// other interfaces, including unlisted ones of the same package) keeps
+/// pointing to the original.
+fn copy_interfaces(resolve: &mut Resolve, ifaces: &[InterfaceId]) -> BTreeMap<InterfaceId, InterfaceId> {
+    let mut map = BTreeMap::new();
+    // Empty copies first, so that types can name their new owners.
+    for id in ifaces.iter() {
+        let pkg = resolve.interfaces[*id].package.unwrap();
+        let mut name = resolve.packages[pkg].name.clone();
+        name.namespace = format!("virtual-{}", name.namespace);
+        let new_pkg = match resolve.package_names.get(&name) {
+            Some(p) => *p,
+            None => {
+                let mut package = resolve.packages[pkg].clone();
+                package.name = name.clone();
+                package.interfaces.clear();
+                package.worlds.clear();
+                let p = resolve.packages.alloc(package);
+                resolve.package_names.insert(name, p);
+                p
+            }
+        };
+        let mut copy = resolve.interfaces[*id].clone();
+        copy.types.clear();
+        copy.functions.clear();
+        copy.package = Some(new_pkg);
+        let iface_name = copy.name.clone().unwrap();
+        let new_id = resolve.interfaces.alloc(copy);
+        resolve.packages[new_pkg].interfaces.insert(iface_name, new_id);
+        map.insert(*id, new_id);
+    }
+    let mut copier = Copier { resolve, ifaces: &map, types: BTreeMap::new() };
+    for (old, new) in map.iter() {
+        let types = copier.resolve.interfaces[*old].types.clone();
+        for (name, ty) in types {
+            let ty = copier.type_id(ty);
+            copier.resolve.interfaces[*new].types.insert(name, ty);
+        }
+        let funcs = copier.resolve.interfaces[*old].functions.clone();
+        for (name, mut func) in funcs {
+            if let Some(r) = func.kind.resource_mut() {
+                *r = copier.type_id(*r);
+            }
+            for p in func.params.iter_mut() {
+                copier.ty(&mut p.ty);
+            }
+            if let Some(t) = &mut func.result {
+                copier.ty(t);
+            }
+            copier.resolve.interfaces[*new].functions.insert(name, func);
+        }
+    }
+    map
+}
+
+struct Copier<'a> {
+    resolve: &'a mut Resolve,
+    ifaces: &'a BTreeMap<InterfaceId, InterfaceId>,
+    types: BTreeMap<TypeId, TypeId>,
+}
+
+impl Copier<'_> {
+    /// The copy of `id`: types owned by a copied interface, and anonymous
+    /// types (which may contain those), are copied; others are kept.
+    fn type_id(&mut self, id: TypeId) -> TypeId {
+        if let Some(new) = self.types.get(&id) {
+            return *new;
+        }
+        let mut def = self.resolve.types[id].clone();
+        match def.owner {
+            TypeOwner::Interface(i) => match self.ifaces.get(&i) {
+                Some(new) => def.owner = TypeOwner::Interface(*new),
+                None => return id,
+            },
+            TypeOwner::None => {}
+            TypeOwner::World(_) => return id,
+        }
+        match &mut def.kind {
+            TypeDefKind::Type(t) | TypeDefKind::Option(t) | TypeDefKind::List(t) => self.ty(t),
+            TypeDefKind::FixedLengthList(t, _) => self.ty(t),
+            TypeDefKind::Map(k, v) => {
+                self.ty(k);
+                self.ty(v);
+            }
+            TypeDefKind::Handle(Handle::Own(r) | Handle::Borrow(r)) => *r = self.type_id(*r),
+            TypeDefKind::Tuple(t) => t.types.iter_mut().for_each(|t| self.ty(t)),
+            TypeDefKind::Record(r) => r.fields.iter_mut().for_each(|f| self.ty(&mut f.ty)),
+            TypeDefKind::Variant(v) => v.cases.iter_mut().for_each(|c| {
+                if let Some(t) = &mut c.ty {
+                    self.ty(t)
+                }
+            }),
+            TypeDefKind::Result(r) => {
+                if let Some(t) = &mut r.ok {
+                    self.ty(t);
+                }
+                if let Some(t) = &mut r.err {
+                    self.ty(t);
+                }
+            }
+            TypeDefKind::Future(t) | TypeDefKind::Stream(t) => {
+                if let Some(t) = t {
+                    self.ty(t);
+                }
+            }
+            TypeDefKind::Resource | TypeDefKind::Flags(_) | TypeDefKind::Enum(_) | TypeDefKind::Unknown => {}
+        }
+        let new = self.resolve.types.alloc(def);
+        self.types.insert(id, new);
+        new
+    }
+
+    fn ty(&mut self, t: &mut Type) {
+        if let Type::Id(id) = t {
+            *id = self.type_id(*id);
+        }
+    }
+}
+
 fn camel(name: &str) -> String {
     match name {
         "guest" => "Guest_".to_string(),

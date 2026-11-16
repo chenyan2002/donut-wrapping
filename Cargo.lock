@@ -1158,9 +1158,9 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.10.3"
+version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65c9fb96cbc91e3478eaae79a69fcd3f1ae4ad052e471fe6732fff548984b4af"
+checksum = "8f6fa277c67e6ea590466f04c3fe82cb509f0864fe470643e5570de9514a9b11"
 dependencies = [
  "chacha20",
  "getrandom 0.4.3",
@@ -1265,6 +1265,21 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "secrets-app"
+version = "0.1.0"
+dependencies = [
+ "wit-bindgen",
+]
+
+[[package]]
+name = "secrets-donut"
+version = "0.1.0"
+dependencies = [
+ "donut",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "semver"
@@ -1741,6 +1756,7 @@ dependencies = [
 [[package]]
 name = "wasm-encoder"
 version = "0.263.0"
+source = "git+https://github.com/chenyan2002/wasm-tools?branch=donut#5515b31c65a4fb30bf384b1de7698398a8e5c2b7"
 dependencies = [
  "leb128fmt",
  "wasmparser 0.263.0",
@@ -1761,6 +1777,7 @@ dependencies = [
 [[package]]
 name = "wasm-metadata"
 version = "0.263.0"
+source = "git+https://github.com/chenyan2002/wasm-tools?branch=donut#5515b31c65a4fb30bf384b1de7698398a8e5c2b7"
 dependencies = [
  "anyhow",
  "indexmap",
@@ -1784,6 +1801,7 @@ dependencies = [
 [[package]]
 name = "wasmparser"
 version = "0.263.0"
+source = "git+https://github.com/chenyan2002/wasm-tools?branch=donut#5515b31c65a4fb30bf384b1de7698398a8e5c2b7"
 dependencies = [
  "bitflags",
  "hashbrown 0.17.1",
@@ -2360,6 +2378,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen"
 version = "0.63.0"
+source = "git+https://github.com/chenyan2002/wit-bindgen?branch=donut#47bafd0601bd3ca71428d4a7ec321f7a178a90fb"
 dependencies = [
  "bitflags",
  "wit-bindgen-rust-macro",
@@ -2368,6 +2387,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-core"
 version = "0.63.0"
+source = "git+https://github.com/chenyan2002/wit-bindgen?branch=donut#47bafd0601bd3ca71428d4a7ec321f7a178a90fb"
 dependencies = [
  "anyhow",
  "heck",
@@ -2377,6 +2397,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust"
 version = "0.63.0"
+source = "git+https://github.com/chenyan2002/wit-bindgen?branch=donut#47bafd0601bd3ca71428d4a7ec321f7a178a90fb"
 dependencies = [
  "anyhow",
  "heck",
@@ -2391,6 +2412,7 @@ dependencies = [
 [[package]]
 name = "wit-bindgen-rust-macro"
 version = "0.63.0"
+source = "git+https://github.com/chenyan2002/wit-bindgen?branch=donut#47bafd0601bd3ca71428d4a7ec321f7a178a90fb"
 dependencies = [
  "anyhow",
  "macro-string",
@@ -2424,6 +2446,7 @@ dependencies = [
 [[package]]
 name = "wit-component"
 version = "0.263.0"
+source = "git+https://github.com/chenyan2002/wasm-tools?branch=donut#5515b31c65a4fb30bf384b1de7698398a8e5c2b7"
 dependencies = [
  "anyhow",
  "bitflags",
@@ -2460,6 +2483,7 @@ dependencies = [
 [[package]]
 name = "wit-parser"
 version = "0.263.0"
+source = "git+https://github.com/chenyan2002/wasm-tools?branch=donut#5515b31c65a4fb30bf384b1de7698398a8e5c2b7"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.1",

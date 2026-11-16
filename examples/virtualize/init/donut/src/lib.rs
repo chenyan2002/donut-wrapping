@@ -14,7 +14,7 @@ thread_local! {
 
 struct Donut;
 
-impl exports::example::virt::init_host::Guest for Donut {
+impl exports::virtual_example::virt::init_host::Guest for Donut {
     fn tick() -> u32 {
         TICKS.set(TICKS.get() + 1);
         TICKS.get()

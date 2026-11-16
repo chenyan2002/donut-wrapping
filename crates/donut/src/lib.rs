@@ -26,14 +26,21 @@
 //! Supported options: `path` (a string or a list of strings, relative to the
 //! crate's manifest directory; default `"wit"`), `world`, `guest`,
 //! `virtualize`, and for generated forwarding, `forward` (interfaces to
-//! forward: guest imports go to the host, shared exports go to the guest) with
-//! `hooks` (the type that implements `forward::Hooks`).
+//! forward: guest imports go to the host, shared exports go to the guest),
+//! `mock` (guest imports with generated impls defaulting to `unimplemented!()`),
+//! and `hooks` (the type that implements `forward::Hooks`).
+//!
+//! A `mock` entry is an interface name, or a map giving its resources' state
+//! types: `mock: ["a:b/c", { "a:b/fs": { file: OpenFile } }]`. A resource
+//! is named in snake case (`incoming_request` for `incoming-request`) or as a
+//! string. A mocked resource without a state type can't be created.
 
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use std::path::PathBuf;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
+use std::collections::BTreeMap;
 use syn::{Ident, LitStr, Token, braced, bracketed};
 
 #[proc_macro]
@@ -51,6 +58,8 @@ struct Input {
     guest: LitStr,
     virtualize: Vec<LitStr>,
     forward: Vec<LitStr>,
+    mock: Vec<LitStr>,
+    mock_types: BTreeMap<String, BTreeMap<String, String>>,
     hooks: Option<syn::Path>,
 }
 
@@ -63,6 +72,8 @@ impl Parse for Input {
         let mut guest = None;
         let mut virtualize = None;
         let mut forward = Vec::new();
+        let mut mock = Vec::new();
+        let mut mock_types = BTreeMap::new();
         let mut hooks = None;
         while !content.is_empty() {
             let key: Ident = content.parse()?;
@@ -73,13 +84,14 @@ impl Parse for Input {
                 "guest" => guest = Some(content.parse::<LitStr>()?),
                 "virtualize" => virtualize = Some(parse_strings(&content)?),
                 "forward" => forward = parse_strings(&content)?,
+                "mock" => (mock, mock_types) = parse_mock(&content)?,
                 "hooks" => hooks = Some(content.parse::<syn::Path>()?),
                 other => {
                     return Err(syn::Error::new(
                         key.span(),
                         format!(
                             "unknown `donut!` option `{other}`; expected one of \
-                             `path`, `world`, `guest`, `virtualize`, `forward`, `hooks`"
+                             `path`, `world`, `guest`, `virtualize`, `forward`, `mock`, `hooks`"
                         ),
                     ));
                 }
@@ -96,6 +108,8 @@ impl Parse for Input {
             guest: guest.ok_or_else(|| missing("guest"))?,
             virtualize: virtualize.unwrap_or_default(),
             forward,
+            mock,
+            mock_types,
             hooks,
         })
     }
@@ -111,6 +125,56 @@ fn parse_strings(input: ParseStream<'_>) -> syn::Result<Vec<LitStr>> {
     } else {
         Ok(vec![input.parse()?])
     }
+}
+
+/// `mock`'s list: interface names, or `{ "iface": { resource: Type, ... } }`
+/// maps giving state types.
+#[allow(clippy::type_complexity)]
+fn parse_mock(input: ParseStream<'_>) -> syn::Result<(Vec<LitStr>, BTreeMap<String, BTreeMap<String, String>>)> {
+    let content;
+    bracketed!(content in input);
+    let mut names = Vec::new();
+    let mut types = BTreeMap::new();
+    while !content.is_empty() {
+        if content.peek(syn::token::Brace) {
+            let map;
+            braced!(map in content);
+            while !map.is_empty() {
+                let iface: LitStr = map.parse()?;
+                map.parse::<Token![:]>()?;
+                let fields;
+                braced!(fields in map);
+                let mut state = BTreeMap::new();
+                while !fields.is_empty() {
+                    let res = if fields.peek(LitStr) {
+                        fields.parse::<LitStr>()?.value()
+                    } else {
+                        fields.parse::<Ident>()?.to_string().replace('_', "-")
+                    };
+                    fields.parse::<Token![:]>()?;
+                    let ty: syn::Type = fields.parse()?;
+                    state.insert(res, quote!(#ty).to_string());
+                    if fields.is_empty() {
+                        break;
+                    }
+                    fields.parse::<Token![,]>()?;
+                }
+                types.insert(iface.value(), state);
+                names.push(iface);
+                if map.is_empty() {
+                    break;
+                }
+                map.parse::<Token![,]>()?;
+            }
+        } else {
+            names.push(content.parse()?);
+        }
+        if content.is_empty() {
+            break;
+        }
+        content.parse::<Token![,]>()?;
+    }
+    Ok((names, types))
 }
 
 fn expand(input: Input) -> syn::Result<TokenStream> {
@@ -135,6 +199,8 @@ fn expand(input: Input) -> syn::Result<TokenStream> {
         guest: input.guest.value(),
         virtualize: input.virtualize.iter().map(|s| s.value()).collect(),
         forward: input.forward.iter().map(|s| s.value()).collect(),
+        mock: input.mock.iter().map(|s| s.value()).collect(),
+        mock_types: input.mock_types,
         hooks: input
             .hooks
             .as_ref()

@@ -11,7 +11,7 @@ donut::donut!({
     virtualize: ["example:virt/types", "example:virt/outgoing", "example:virt/relay"],
 });
 
-use exports::example::virt::types::{
+use exports::virtual_example::virt::types::{
     Guest as TypesGuest, GuestRequest, GuestResponse, Request, Response, Tagged, Wrapped,
 };
 use guest::example::virt::handler::{self, Session};
@@ -77,7 +77,7 @@ impl TypesGuest for Donut {
     type Response = MyResponse;
 }
 
-impl exports::example::virt::outgoing::Guest for Donut {
+impl exports::virtual_example::virt::outgoing::Guest for Donut {
     fn send(r: Request) -> Response {
         let path = r.get::<MyRequest>().path.clone();
         log(format!("guest:send({path})"));
@@ -97,7 +97,7 @@ impl exports::example::virt::outgoing::Guest for Donut {
 }
 
 // The downstream the guest's middleware `relay` forwards to.
-impl exports::example::virt::relay::Guest for Donut {
+impl exports::virtual_example::virt::relay::Guest for Donut {
     fn relay(t: Tagged<'_>) -> String {
         format!("downstream({}#{})", t.req.get::<MyRequest>().path, t.tag)
     }

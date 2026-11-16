@@ -70,8 +70,8 @@ fn forward_snapshot() {
     // The virtual side is a renamed copy, and the forwarding module is there.
     assert!(out.source.contains("pub mod virtual_example"));
     assert!(out.source.contains("pub mod forward"));
-    assert!(out.source.contains("pub struct FwdKvStore"));
-    assert!(out.source.contains("pub struct FwdAppSession"));
+    assert!(out.source.contains("pub struct FwdExampleRecKvStore"));
+    assert!(out.source.contains("pub struct FwdExampleRecAppSession"));
 }
 
 #[test]
@@ -117,4 +117,117 @@ fn forward_rejects_lending_deep_inside_lists() {
     let err = generate(&resolve, &[pkg], &config).err().expect("should be rejected");
     let msg = format!("{err:#}");
     assert!(msg.contains("lending a host borrow"), "{msg}");
+}
+
+#[test]
+fn forwarding_a_user_of_a_virtualized_resource_is_rejected() {
+    let (resolve, pkgs) = example();
+    // `outgoing` uses `types.request`, which is virtualized but not
+    // forwarded, so there's no host request to forward to the host's `send`.
+    let mut config = config(&["example:virt/types", "example:virt/relay"]);
+    config.forward = vec!["example:virt/outgoing".into()];
+    config.hooks = Some("Hooks".into());
+    let err = generate(&resolve, &pkgs, &config).err().unwrap();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("forwarded `example:virt/outgoing` uses resource `request`"), "{msg}");
+    assert!(msg.contains("forward `example:virt/types` too"), "{msg}");
+}
+
+#[test]
+fn an_interface_listed_twice_is_rejected() {
+    let (resolve, pkgs) = example();
+    let mut config = config(&["example:virt/types", "example:virt/outgoing", "example:virt/relay"]);
+    config.forward = vec!["example:virt/types".into()];
+    config.hooks = Some("Hooks".into());
+    let err = generate(&resolve, &pkgs, &config).err().unwrap();
+    let msg = format!("{err:#}");
+    assert!(msg.contains("is in `virtualize` and in `forward`"), "{msg}");
+}
+
+/// The guest's side is always a `virtual-` copy, of only the listed
+/// interfaces: a virtualized `outgoing` keeps using the passthrough `types`,
+/// even though the donut's own world also imports `outgoing`.
+#[test]
+fn virtual_copies_only_the_listed_interfaces() {
+    let mut resolve = Resolve::default();
+    let pkg = resolve
+        .push_str(
+            "app.wit",
+            r#"
+            package example:app;
+            interface types { resource request { constructor(url: string); } }
+            interface outgoing { use types.{request}; send: func(r: request) -> u16; }
+            interface handler { handle: func() -> u16; }
+            world app { import outgoing; export handler; }
+            world host { import outgoing; export handler; }
+            "#,
+        )
+        .unwrap();
+    let mut config = Config {
+        world: "example:app/host".into(),
+        guest: "example:app/app".into(),
+        virtualize: vec!["example:app/outgoing".into()],
+        ..Config::default()
+    };
+    config.opts.format = true;
+    let out = generate(&resolve, &[pkg], &config).unwrap();
+    // The guest's `outgoing` is the renamed copy; its `request` is the host's.
+    assert!(out.source.contains("pub mod virtual_example"), "no virtual copy");
+    assert!(!out.source.contains("virtual_example::app::types"), "`types` was copied");
+}
+
+fn fs_example() -> (Resolve, wit_parser::PackageId) {
+    let mut resolve = Resolve::default();
+    let pkg = resolve
+        .push_str(
+            "app.wit",
+            r#"
+            package example:app;
+            interface fs {
+              resource file { read: func() -> string; }
+              resource dir { entries: func() -> list<string>; }
+              open: func(path: string) -> result<file, string>;
+            }
+            interface handler { handle: func() -> string; }
+            world app { import fs; export handler; }
+            world host { export handler; }
+            "#,
+        )
+        .unwrap();
+    (resolve, pkg)
+}
+
+fn mock_config(types: &[(&str, &str, &str)]) -> Config {
+    let mut config = Config {
+        world: "example:app/host".into(),
+        guest: "example:app/app".into(),
+        mock: vec!["example:app/fs".into()],
+        hooks: Some("Hooks".into()),
+        ..Config::default()
+    };
+    for (iface, res, ty) in types {
+        config.mock_types.entry(iface.to_string()).or_default().insert(res.to_string(), ty.to_string());
+    }
+    config
+}
+
+/// A mocked resource with a state type is a newtype over it; one without
+/// can't be created at all.
+#[test]
+fn mock_state_types() {
+    let (resolve, pkg) = fs_example();
+    let out = generate(&resolve, &[pkg], &mock_config(&[("example:app/fs", "file", "crate::OpenFile")])).unwrap();
+    assert!(out.source.contains("type __DonutMockExampleAppFsFileState = crate::OpenFile;"));
+    assert!(out.source.contains("pub struct MockExampleAppFsFile { state: Option<crate::__DonutMockExampleAppFsFileState> }"));
+    assert!(out.source.contains("pub struct MockExampleAppFsDir { never: core::convert::Infallible }"));
+}
+
+#[test]
+fn mock_state_type_errors() {
+    let (resolve, pkg) = fs_example();
+    let msg = |c: &Config| format!("{:#}", generate(&resolve, &[pkg], c).err().unwrap());
+    let m = msg(&mock_config(&[("example:app/fs", "open", "T")]));
+    assert!(m.contains("has no resource `open`"), "{m}");
+    let m = msg(&mock_config(&[("example:app/handler", "x", "T")]));
+    assert!(m.contains("isn't in `mock`"), "{m}");
 }

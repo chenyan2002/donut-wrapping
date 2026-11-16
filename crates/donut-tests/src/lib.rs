@@ -4,7 +4,7 @@
 //! The examples are built by their `build.sh` scripts, into
 //! `target/donut-examples` so they don't contend with `cargo test`'s own build.
 //! `WASM_TOOLS` must point at a wasm-tools with wit-component's donut mode
-//! (defaults to the local `~/src/bytecodealliance/wasm-tools` debug build).
+//! (default: `wasm-tools` on PATH; see `examples/common.sh`).
 
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;

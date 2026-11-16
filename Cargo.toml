@@ -10,6 +10,8 @@ members = [
   "examples/forward/recorder",
   "examples/forward/interceptor",
   "examples/fastly/host",
+  "examples/secrets/app",
+  "examples/secrets/donut",
 ]
 exclude = ["spike"]
 resolver = "2"
@@ -34,22 +36,22 @@ wit-parser = "0.263.0"
 donut-plan = { path = "crates/donut-plan" }
 donut = { path = "crates/donut" }
 
-# Local checkouts with the changes this project needs, until they're released:
-# wit-bindgen `donut` branch (`import_module_prefix`) and wasm-tools `donut`
-# branch (wit-component donut mode, `wit_component::donut`). The wasm-tools
-# branch is based on the 1.263.0 release because wit-bindgen 0.63 builds
-# against wasm-tools 0.263 (later wasm-tools `main` changed the wit-parser ABI
-# API).
+# Unreleased changes this project needs, from the `donut` branches of the forks:
+# * wit-bindgen: the `import_module_prefix` option;
+# * wasm-tools: wit-component's donut mode (`wit_component::donut`,
+#   `wasm-tools component new --donut-guest`).
+# The wasm-tools branch is based on the 1.263.0 release because wit-bindgen
+# 0.63 builds against wasm-tools 0.263.
 [patch.crates-io]
-wit-bindgen = { path = "../bytecodealliance/wit-bindgen/crates/guest-rust" }
-wit-bindgen-rust-macro = { path = "../bytecodealliance/wit-bindgen/crates/guest-rust/macro" }
-wit-bindgen-rust = { path = "../bytecodealliance/wit-bindgen/crates/rust" }
-wit-bindgen-core = { path = "../bytecodealliance/wit-bindgen/crates/core" }
-wit-component = { path = "../bytecodealliance/wasm-tools/crates/wit-component" }
-wit-parser = { path = "../bytecodealliance/wasm-tools/crates/wit-parser" }
-wasm-encoder = { path = "../bytecodealliance/wasm-tools/crates/wasm-encoder" }
-wasm-metadata = { path = "../bytecodealliance/wasm-tools/crates/wasm-metadata" }
-wasmparser = { path = "../bytecodealliance/wasm-tools/crates/wasmparser" }
+wit-bindgen = { git = "https://github.com/chenyan2002/wit-bindgen", branch = "donut" }
+wit-bindgen-rust-macro = { git = "https://github.com/chenyan2002/wit-bindgen", branch = "donut" }
+wit-bindgen-rust = { git = "https://github.com/chenyan2002/wit-bindgen", branch = "donut" }
+wit-bindgen-core = { git = "https://github.com/chenyan2002/wit-bindgen", branch = "donut" }
+wit-component = { git = "https://github.com/chenyan2002/wasm-tools", branch = "donut" }
+wit-parser = { git = "https://github.com/chenyan2002/wasm-tools", branch = "donut" }
+wasm-encoder = { git = "https://github.com/chenyan2002/wasm-tools", branch = "donut" }
+wasm-metadata = { git = "https://github.com/chenyan2002/wasm-tools", branch = "donut" }
+wasmparser = { git = "https://github.com/chenyan2002/wasm-tools", branch = "donut" }
 
 [profile.release]
 opt-level = "s"
