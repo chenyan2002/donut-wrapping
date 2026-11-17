@@ -1,10 +1,7 @@
-//! The per-child manifest section.
-//!
-//! It tells wit-component's hole mode how to build a child's hole. This
-//! encoder (and the decoder, used by tests) live here until the encoder side
-//! exists in wit-component; then both move there, next to each other.
+//! The per-child manifest section, which tells wit-component's hole mode how
+//! to build a child's hole. wit-component decodes it.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use wit_component::StringEncoding;
 use wit_parser::{Resolve, WorldId};
 
@@ -78,23 +75,6 @@ impl Manifest {
         }
         out
     }
-
-    pub fn decode(data: &[u8]) -> Result<Manifest> {
-        let mut r = Reader(data);
-        let version = r.byte()?;
-        if version != VERSION {
-            bail!("unsupported child manifest version {version}, expected {VERSION}");
-        }
-        let name = r.string()?;
-        let guest = r.bytes()?.to_vec();
-        let virtualized = (0..r.leb()?).map(|_| Ok((r.string()?, r.string()?))).collect::<Result<_>>()?;
-        let exports = (0..r.leb()?).map(|_| Ok((r.string()?, r.string()?))).collect::<Result<_>>()?;
-        let export_passthrough = (0..r.leb()?).map(|_| r.string()).collect::<Result<_>>()?;
-        if !r.0.is_empty() {
-            bail!("trailing bytes in child manifest");
-        }
-        Ok(Manifest { name, guest, virtualized, exports, export_passthrough })
-    }
 }
 
 fn leb(out: &mut Vec<u8>, mut n: usize) {
@@ -112,37 +92,4 @@ fn leb(out: &mut Vec<u8>, mut n: usize) {
 fn bytes(out: &mut Vec<u8>, b: &[u8]) {
     leb(out, b.len());
     out.extend_from_slice(b);
-}
-
-struct Reader<'a>(&'a [u8]);
-
-impl<'a> Reader<'a> {
-    fn byte(&mut self) -> Result<u8> {
-        let Some((b, rest)) = self.0.split_first() else { bail!("unexpected end of child manifest") };
-        self.0 = rest;
-        Ok(*b)
-    }
-    fn leb(&mut self) -> Result<usize> {
-        let mut n = 0usize;
-        for shift in (0..64).step_by(7) {
-            let b = self.byte()?;
-            n |= ((b & 0x7f) as usize) << shift;
-            if b & 0x80 == 0 {
-                return Ok(n);
-            }
-        }
-        bail!("LEB128 too long in child manifest")
-    }
-    fn bytes(&mut self) -> Result<&'a [u8]> {
-        let len = self.leb()?;
-        if len > self.0.len() {
-            bail!("unexpected end of child manifest");
-        }
-        let (b, rest) = self.0.split_at(len);
-        self.0 = rest;
-        Ok(b)
-    }
-    fn string(&mut self) -> Result<String> {
-        Ok(std::str::from_utf8(self.bytes()?)?.to_string())
-    }
 }

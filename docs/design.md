@@ -289,7 +289,11 @@ removed. Changes from P§5.1:
 * **Metadata.** Drop each child's manifest section, merge the `component-type`
   sections as usual, then drop every import in namespace `guest-<child>` from the
   merged world: those are the child's exports and the types-only copies of what
-  they use, not host imports. Nothing else depends on them.
+  they use, not host imports. Nothing else depends on them. Each child's `G` is
+  merged into the `Resolve` too, and children with the same `G` share one merged
+  copy: merging binds `G` to interfaces already present (e.g. `std`'s fuller
+  `wasi:clocks@0.2.0`, which pulls in `wasi:io/poll`), so a second, unmerged copy
+  of the same world would no longer match the first.
 * **The hole.** Per child, `(import "<child>" (component $G))`, where `$G` is `G`
   encoded as a component type (the same world → component-type encoding
   wit-component uses for WIT packages). The hole's type is exactly `G`, so a
@@ -303,8 +307,9 @@ removed. Changes from P§5.1:
   added even when the core module doesn't import them. The child's world imports
   only the passthrough interfaces the generated Rust needs (the dependencies of
   either side), so most of them (e.g. a guest's `wasi:cli/*`) are only in `G`.
-* **Instantiation, per child, in manifest order** (the order the sections appear
-  in the linked module; see §10 on making it controllable), after phase-1 fixup (host lowerings, dtors, `_initialize`):
+* **Instantiation, per child, in an unspecified order** (in practice, the order the
+  manifest sections appear in the linked module, which is up to rustc and wasm-ld),
+  after phase-1 fixup (host lowerings, dtors, `_initialize`):
   1. instantiate the hole with the child's virtual instances and passthrough imports;
   2. alias its exports, `canon lower` them, and `canon resource.drop` for its
      resources;
@@ -366,8 +371,8 @@ Code moves from `prototype` to `main` in this order, trimmed as it moves.
 | Step | Where | Work |
 |---|---|---|
 | 1 | `spike/` | Done: a hand-written donut with two holes, plugged by hand, runs on Wasmtime 49 and 50 (`spike/README.md`). It confirms component-valued arguments, per-child fixups, both passthroughs, and the version-skew rejection. |
-| 2 | this repo | Done: `donut-plan` (without `forward.rs`) and `child!`, with options, patterns, checks (§4), `mod <name>` and per-child naming (§5), and manifest v1 (encoded in `donut-plan` for now; it moves to wit-component with the decoder in step 3). `examples/spike` is the spike's donut written with `child!`; `check.sh` checks that its core module has exactly the child-related names of `spike/donut.wat`'s `$main`. |
-| 3 | wit-component | Hole mode (§7). Remove embed mode and `--donut-guest`. |
+| 2 | this repo | Done: `donut-plan` (without `forward.rs`) and `child!`, with options, patterns, checks (§4), `mod <name>` and per-child naming (§5), and manifest v1 (encoded by `donut-plan`, decoded by wit-component). `examples/spike` is the spike's donut written with `child!`; `check.sh` checks that its core module has exactly the child-related names of `spike/donut.wat`'s `$main`. |
+| 3 | wit-component | Done, on wasm-tools' `donut-hole` branch: hole mode (§7), with embed mode and `--donut-guest` removed. `spike/run.sh` encodes `examples/spike` with it, plugs the spike's guests, and passes the same checks as the hand-written donut. |
 | 4 | wac | Component-valued plug (§8). |
 | 5 | this repo | End-to-end tests (`cargo build` → `component new` → `wac plug` → Wasmtime). Port `examples/virtualize`, port `examples/secrets` with hand-written impls, and add a two-child example. Drop `examples/forward` and `examples/fastly` (they're about generated forwarding and mocks). |
 | 6 | upstream | PRs for steps 3 and 4. wasm-component-ld picks up hole mode with no new flag. |
@@ -387,9 +392,7 @@ Code moves from `prototype` to `main` in this order, trimmed as it moves.
    edit the guest's WIT to add `include wasi:…`?
 4. ~~**Crate and section naming.**~~ Decided: the crates stay `donut` and
    `donut-plan`.
-5. **Child instantiation order.** Children are instantiated in the order their
-   manifest sections appear in the linked module. With several `child!`s in one
-   crate, that's up to rustc and wasm-ld (the spike crate happens to get `a`
-   before `b`), so a child whose start function calls another child can't rely
-   on it. Options: sort by name; an `after: ["other"]` option; or document that
-   start functions mustn't call other children.
+5. ~~**Child instantiation order.**~~ Decided: unspecified. A child's start
+   function must not call donut code that calls another child: that child may
+   not be linked yet, and the call traps. (Sorting by name, or an
+   `after: ["other"]` option, could make it controllable later.)

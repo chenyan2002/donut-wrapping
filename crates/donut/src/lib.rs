@@ -26,6 +26,9 @@
 //!
 //! The crate also needs a `wit-bindgen` dependency, as for `generate!`.
 //! Several `child!`s can be used in one crate, each with its own `name`.
+//! Children are instantiated one after another, in an unspecified order, so
+//! a child's start function must not call code that calls another child:
+//! that child may not be linked yet, and the call traps.
 //!
 //! Options:
 //!

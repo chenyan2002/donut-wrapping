@@ -89,7 +89,7 @@ fn manifest() {
         ]
     );
     assert_eq!(m.export_passthrough, ["spike:hole/info"]);
-    assert_eq!(&Manifest::decode(&m.encode()).unwrap(), m);
+    assert_eq!(&decode(&m.encode()), m);
 
     // `G` decodes back to the guest world.
     let guest = wit_component::metadata::decode(&{
@@ -315,4 +315,46 @@ fn guest_side_remaps() {
     let remaps = plan.guest_side_remaps().into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(remaps, ["guest-c:t-t/types/r", "guest-c:t-t/types/plain", "guest-c:t-t/types/owning"]);
     generate(&resolve, &pkgs, &config).unwrap();
+}
+
+/// Decodes a manifest, to check that the encoding round-trips. wit-component
+/// has the real decoder.
+fn decode(data: &[u8]) -> Manifest {
+    struct Reader<'a>(&'a [u8]);
+    impl<'a> Reader<'a> {
+        fn byte(&mut self) -> u8 {
+            let (b, rest) = self.0.split_first().unwrap();
+            self.0 = rest;
+            *b
+        }
+        fn leb(&mut self) -> usize {
+            let mut n = 0;
+            for shift in (0..64).step_by(7) {
+                let b = self.byte();
+                n |= ((b & 0x7f) as usize) << shift;
+                if b & 0x80 == 0 {
+                    return n;
+                }
+            }
+            panic!("LEB128 too long")
+        }
+        fn bytes(&mut self) -> &'a [u8] {
+            let len = self.leb();
+            let (b, rest) = self.0.split_at(len);
+            self.0 = rest;
+            b
+        }
+        fn string(&mut self) -> String {
+            String::from_utf8(self.bytes().to_vec()).unwrap()
+        }
+    }
+    let mut r = Reader(data);
+    assert_eq!(r.byte(), donut_plan::MANIFEST_VERSION);
+    let name = r.string();
+    let guest = r.bytes().to_vec();
+    let virtualized = (0..r.leb()).map(|_| (r.string(), r.string())).collect();
+    let exports = (0..r.leb()).map(|_| (r.string(), r.string())).collect();
+    let export_passthrough = (0..r.leb()).map(|_| r.string()).collect();
+    assert!(r.0.is_empty(), "trailing bytes");
+    Manifest { name, guest, virtualized, exports, export_passthrough }
 }
