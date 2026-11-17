@@ -1,18 +1,28 @@
 package example:greeter;
 
 interface config {
-  get: func(key: string) -> option<string>;
+  /// Settings for one request, made by the caller.
+  resource settings {
+    get: func(key: string) -> option<string>;
+  }
 }
 
+/// What the app exports.
+interface greeting {
+  use config.{settings};
+  greet: func(settings: borrow<settings>, name: string) -> string;
+}
+
+/// What the donut exports.
 interface handler {
-  handle: func(name: string) -> string;
+  handle: func(path: string) -> string;
 }
 
 /// What the app targets, and so each hole's type.
 world app {
   include wasi:cli/imports@0.2.9;   // what Rust `std` imports on wasm32-wasip2
   import config;
-  export handler;
+  export greeting;
 }
 
 /// The donut's own world.

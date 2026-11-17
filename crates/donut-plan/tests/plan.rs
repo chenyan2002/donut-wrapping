@@ -88,6 +88,9 @@ fn manifest() {
             ("spike:hole/info".to_string(), "guest-my-app:spike-hole/info".to_string()),
         ]
     );
+    // `handler` uses `types.counter`, so `types` has a types-only copy;
+    // `host-api` has none, since no export uses it.
+    assert_eq!(m.guest_types, ["guest-my-app:spike-hole/types"]);
     assert_eq!(m.export_passthrough, ["spike:hole/info"]);
     assert_eq!(&decode(&m.encode()), m);
 
@@ -354,7 +357,8 @@ fn decode(data: &[u8]) -> Manifest {
     let guest = r.bytes().to_vec();
     let virtualized = (0..r.leb()).map(|_| (r.string(), r.string())).collect();
     let exports = (0..r.leb()).map(|_| (r.string(), r.string())).collect();
+    let guest_types = (0..r.leb()).map(|_| r.string()).collect();
     let export_passthrough = (0..r.leb()).map(|_| r.string()).collect();
     assert!(r.0.is_empty(), "trailing bytes");
-    Manifest { name, guest, virtualized, exports, export_passthrough }
+    Manifest { name, guest, virtualized, exports, guest_types, export_passthrough }
 }

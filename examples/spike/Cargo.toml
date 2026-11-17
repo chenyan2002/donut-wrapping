@@ -1,0 +1,14 @@
+[package]
+name = "spike-donut"
+description = "spike/donut.wat's core module, written with `child!`"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+donut = { workspace = true }
+wit-bindgen = { workspace = true }

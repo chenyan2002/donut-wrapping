@@ -18,26 +18,48 @@ donut::child!({
 
 struct Donut;
 
-// The donut's own export: route `<lang>/<name>` to a child.
+// The donut's own export: route `<lang>/<name>` to a child, with settings
+// in its own `config`.
 impl exports::example::greeter::handler::Guest for Donut {
     fn handle(path: String) -> String {
         match path.split_once('/') {
-            Some(("en", name)) => english::guest::example::greeter::handler::handle(name),
-            Some(("fr", name)) => french::guest::example::greeter::handler::handle(name),
+            Some(("en", name)) => {
+                let settings = english::virt::example::greeter::config::Settings::new(Settings("Hello"));
+                english::guest::example::greeter::greeting::greet(&settings, name)
+            }
+            Some(("fr", name)) => {
+                let settings = french::virt::example::greeter::config::Settings::new(Settings("Bonjour"));
+                french::guest::example::greeter::greeting::greet(&settings, name)
+            }
             _ => format!("unknown route `{path}`"),
         }
     }
 }
 
-// Each child's `config`: a different greeting.
+/// A child's `settings`: one Rust type behind both children's resources.
+struct Settings(&'static str);
+
+impl Settings {
+    fn get(&self, key: &str) -> Option<String> {
+        (key == "greeting").then(|| self.0.to_string())
+    }
+}
+
+// Each child's `config`.
 impl english::virt::example::greeter::config::Guest for Donut {
-    fn get(key: String) -> Option<String> {
-        (key == "greeting").then(|| "Hello".to_string())
+    type Settings = Settings;
+}
+impl english::virt::example::greeter::config::GuestSettings for Settings {
+    fn get(&self, key: String) -> Option<String> {
+        Settings::get(self, &key)
     }
 }
 impl french::virt::example::greeter::config::Guest for Donut {
-    fn get(key: String) -> Option<String> {
-        (key == "greeting").then(|| "Bonjour".to_string())
+    type Settings = Settings;
+}
+impl french::virt::example::greeter::config::GuestSettings for Settings {
+    fn get(&self, key: String) -> Option<String> {
+        Settings::get(self, &key)
     }
 }
 

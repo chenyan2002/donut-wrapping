@@ -27,11 +27,13 @@ pub struct Manifest {
     pub virtualized: Vec<(String, String)>,
     /// Every export of `G`: its name, and the import (its `guest-<name>:…`
     /// copy) through which the donut calls it. Calls to
-    /// `"guest-a:ns-pkg/iface" "f"` go to child `a`'s `ns:pkg/iface.f`. Every
-    /// import in namespace `guest-<name>` (these, and types-only copies of
-    /// what they use) is the child's, not the host's: the encoder drops them
-    /// from the merged world.
+    /// `"guest-a:ns-pkg/iface" "f"` go to child `a`'s `ns:pkg/iface.f`.
     pub exports: Vec<(String, String)>,
+    /// The types-only copies of the virtualized interfaces the exports use,
+    /// which the donut's world imports so that the `exports` copies can
+    /// `use` them. Like the `exports` copies, they're the child's, not the
+    /// host's: the encoder drops both from the merged world.
+    pub guest_types: Vec<String>,
     /// Guest exports the donut re-exports unchanged.
     pub export_passthrough: Vec<String>,
 }
@@ -43,10 +45,11 @@ impl Manifest {
         name: &str,
         virtualized: Vec<(String, String)>,
         exports: Vec<(String, String)>,
+        guest_types: Vec<String>,
         export_passthrough: Vec<String>,
     ) -> Result<Manifest> {
         let guest = wit_component::metadata::encode(resolve, guest, StringEncoding::UTF8, None, false)?;
-        Ok(Manifest { name: name.to_string(), guest, virtualized, exports, export_passthrough })
+        Ok(Manifest { name: name.to_string(), guest, virtualized, exports, guest_types, export_passthrough })
     }
 
     /// The custom section's name.
@@ -56,8 +59,9 @@ impl Manifest {
 
     /// Layout: `version: u8`, `name: string`, `guest: vec<u8>`,
     /// `virtualized: vec<(string, string)>`,
-    /// `exports: vec<(string, string)>`, `export_passthrough: vec<string>`,
-    /// with LEB128 lengths, as in the component binary format.
+    /// `exports: vec<(string, string)>`, `guest_types: vec<string>`,
+    /// `export_passthrough: vec<string>`, with LEB128 lengths, as in the
+    /// component binary format.
     pub fn encode(&self) -> Vec<u8> {
         let mut out = vec![VERSION];
         bytes(&mut out, self.name.as_bytes());
@@ -69,9 +73,11 @@ impl Manifest {
                 bytes(&mut out, b.as_bytes());
             }
         }
-        leb(&mut out, self.export_passthrough.len());
-        for name in self.export_passthrough.iter() {
-            bytes(&mut out, name.as_bytes());
+        for names in [&self.guest_types, &self.export_passthrough] {
+            leb(&mut out, names.len());
+            for name in names.iter() {
+                bytes(&mut out, name.as_bytes());
+            }
         }
         out
     }

@@ -20,7 +20,7 @@
 //!
 //!   Its `component-type` section merges with the donut's own world; the
 //!   encoder then drops the `guest-<child>` imports, which are the child's
-//!   exports, not the host's.
+//!   exports, not the host's. The manifest lists them all.
 //! * **`virt`** and **`guest`**: re-exports of the copies under their
 //!   original paths, so users implement `<name>::virt::<ns>::<pkg>::<iface>`
 //!   and call `<name>::guest::…`.
@@ -387,6 +387,7 @@ impl Plan {
             &self.name.kebab,
             pairs(&self.virtualized, &self.virtual_exports),
             pairs(&self.guest_exports, &self.guest_export_copies),
+            self.guest_dep_copies.iter().map(id_of).collect(),
             self.export_passthrough.iter().map(id_of).collect(),
         )
     }

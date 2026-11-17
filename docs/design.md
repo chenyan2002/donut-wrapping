@@ -273,8 +273,12 @@ string child-name
 vec<u8> G                         // wit-component's metadata encoding
 vec<(string, string)> virtualized // guest import name → the export implementing it (virtual-<child>:…)
 vec<(string, string)> exports     // guest export name → the import calling it (guest-<child>:…)
+vec<string> guest_types           // types-only copies the `exports` copies use (guest-<child>:…)
 vec<string> export_passthrough    // guest export names
 ```
+
+Every name of a copy is spelled out, so the encoder never relies on the
+`virtual-`/`guest-` naming: it only compares names with the manifest's.
 
 Passthrough imports are derived: `G`'s imports minus `virtualized`, each bound
 to the donut import with the same `Resolve::canonicalized_id_of` (semver merging
@@ -287,9 +291,9 @@ an input: `ComponentEncoder::donut_guest` and `component new --donut-guest` are
 removed. Changes from P§5.1:
 
 * **Metadata.** Drop each child's manifest section, merge the `component-type`
-  sections as usual, then drop every import in namespace `guest-<child>` from the
-  merged world: those are the child's exports and the types-only copies of what
-  they use, not host imports. Nothing else depends on them. Each child's `G` is
+  sections as usual, then drop the imports the manifests list (`exports`' copies and
+  `guest_types`) from the merged world: those are the child's exports and the
+  types-only copies of what they use, not host imports. Nothing else depends on them. Each child's `G` is
   merged into the `Resolve` too, and children with the same `G` share one merged
   copy: merging binds `G` to interfaces already present (e.g. `std`'s fuller
   `wasi:clocks@0.2.0`, which pulls in `wasi:io/poll`), so a second, unmerged copy

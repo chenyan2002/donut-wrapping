@@ -15,11 +15,12 @@ pattern from the component model Explainer. There is a prototype implementation 
 
 ## Example: one app, two configurations
 
-An app greets people, using a greeting it reads from a `config` interface. We
-want to run it twice in one component, once in English and once in French, and
-route requests to the right copy. The donut has two children, `english` and
-`french`, both of the app's world. Each child gets its own `config`, so the
-same app binary behaves differently in each hole.
+An app greets people, using a greeting it reads from a `settings` resource
+that comes with each request. We want to run it twice in one component, once
+in English and once in French, and route requests to the right copy. The donut
+has two children, `english` and `french`, both of the app's world. Each child
+gets its own `config`, whose `settings` the donut makes, so the same app binary
+behaves differently in each hole.
 
 The code is in [`examples/greeter`](examples/greeter): `wit/`, `app/` (crate
 `greeter-app`), and `donut/` (crate `greeter-donut`). Its `run.sh` runs the
@@ -31,29 +32,30 @@ steps below and checks the output.
 package example:greeter;
 
 interface config {
-  get: func(key: string) -> option<string>;
+  resource settings {
+    get: func(key: string) -> option<string>;
+  }
+}
+
+interface greeting {
+  use config.{settings};
+  greet: func(settings: borrow<settings>, name: string) -> string;
 }
 
 interface handler {
-  handle: func(name: string) -> string;
+  handle: func(path: string) -> string;
 }
 
-/// What the app targets, and so each hole's type.
 world app {
-  include wasi:cli/imports@0.2.9;   // what Rust `std` imports on wasm32-wasip2
+  include wasi:cli/imports@0.2.9;
   import config;
-  export handler;
+  export greeting;
 }
 
-/// The donut's own world.
 world host {
   export handler;
 }
 ```
-
-`wit/deps` holds the WASI 0.2.9 packages (`cli`, `clocks`, `filesystem`, `io`,
-`random`, `sockets`), e.g. copied from the `wasip2-1.0.2+wasi-0.2.9` crate's
-`wit/deps`.
 
 ### The app
 
@@ -62,13 +64,13 @@ An ordinary component that knows nothing about donuts:
 ```rust
 wit_bindgen::generate!({ path: "../wit", world: "example:greeter/app", generate_all });
 
-use example::greeter::config;
+use example::greeter::config::Settings;
 
 struct App;
 
-impl exports::example::greeter::handler::Guest for App {
-    fn handle(name: String) -> String {
-        let greeting = config::get("greeting").unwrap_or_else(|| "hello".to_string());
+impl exports::example::greeter::greeting::Guest for App {
+    fn greet(settings: &Settings, name: String) -> String {
+        let greeting = settings.get("greeting").unwrap_or_else(|| "hello".to_string());
         format!("{greeting}, {name}!")
     }
 }
@@ -99,26 +101,48 @@ donut::child!({
 
 struct Donut;
 
-// The donut's own export: route `<lang>/<name>` to a child.
+// The donut's own export: route `<lang>/<name>` to a child, with settings
+// in its own `config`.
 impl exports::example::greeter::handler::Guest for Donut {
     fn handle(path: String) -> String {
         match path.split_once('/') {
-            Some(("en", name)) => english::guest::example::greeter::handler::handle(name),
-            Some(("fr", name)) => french::guest::example::greeter::handler::handle(name),
+            Some(("en", name)) => {
+                let settings = english::virt::example::greeter::config::Settings::new(Settings("Hello"));
+                english::guest::example::greeter::greeting::greet(&settings, name)
+            }
+            Some(("fr", name)) => {
+                let settings = french::virt::example::greeter::config::Settings::new(Settings("Bonjour"));
+                french::guest::example::greeter::greeting::greet(&settings, name)
+            }
             _ => format!("unknown route `{path}`"),
         }
     }
 }
 
-// Each child's `config`: a different greeting.
+/// A child's `settings`: one Rust type behind both children's resources.
+struct Settings(&'static str);
+
+impl Settings {
+    fn get(&self, key: &str) -> Option<String> {
+        (key == "greeting").then(|| self.0.to_string())
+    }
+}
+
+// Each child's `config`.
 impl english::virt::example::greeter::config::Guest for Donut {
-    fn get(key: String) -> Option<String> {
-        (key == "greeting").then(|| "Hello".to_string())
+    type Settings = Settings;
+}
+impl english::virt::example::greeter::config::GuestSettings for Settings {
+    fn get(&self, key: String) -> Option<String> {
+        Settings::get(self, &key)
     }
 }
 impl french::virt::example::greeter::config::Guest for Donut {
-    fn get(key: String) -> Option<String> {
-        (key == "greeting").then(|| "Bonjour".to_string())
+    type Settings = Settings;
+}
+impl french::virt::example::greeter::config::GuestSettings for Settings {
+    fn get(&self, key: String) -> Option<String> {
+        Settings::get(self, &key)
     }
 }
 
@@ -131,8 +155,8 @@ Each `child!` expands to a module named after the child:
 
 | Path | What |
 |---|---|
-| `english::virt::<ns>::<pkg>::<iface>` | the interfaces the child imports and the donut implements: implement their `Guest` traits |
-| `english::guest::<ns>::<pkg>::<iface>` | functions that call the child's exports |
+| `english::virt::<ns>::<pkg>::<iface>` | the interfaces the child imports and the donut implements: implement their `Guest` traits, and a `Guest<Resource>` trait per resource. A resource type here (`english::virt::…::config::Settings`) is the donut's own: make one with `Settings::new(value)` |
+| `english::guest::<ns>::<pkg>::<iface>` | functions that call the child's exports. They take and return the `virt` resource types, so `greet` takes a `&english::virt::…::config::Settings` |
 | `english::export!` | registers your implementation, like `generate!`'s `export!` |
 
 The donut crate depends on `donut` and `wit-bindgen`, and is a `cdylib`.
