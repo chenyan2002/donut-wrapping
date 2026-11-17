@@ -9,9 +9,8 @@ For each child, your component:
 * leaves a typed *hole* where the child goes. `wac plug` fills it with a real
   component later, so one built donut can wrap any component of the right type.
 
-This is the [donut wrapping](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md)
-pattern from the component model Explainer. The design is in
-[`docs/design.md`](docs/design.md); the original implementation is on the
+This is the [donut wrapping](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md#virtualization-and-donut-wrapping)
+pattern from the component model Explainer. There is a prototype implementation with more features on the
 [prototype branch](https://github.com/chenyan2002/donut-wrapping/tree/prototype).
 
 ## Example: one app, two configurations
@@ -187,7 +186,7 @@ What each step does:
    its type fits; here both holes have the same type, so each plug names its
    hole (`english=…`). The holes are gone from the result, which only imports
    WASI.
-5. **Wasmtime** (≥ 49) runs it like any component.
+5. **Wasmtime** runs it like any component.
 
 The same `donut.wasm` can be plugged with any components of the app's world,
 without rebuilding the donut.
@@ -218,7 +217,7 @@ Passthrough entries are `ns:pkg/iface`, `ns:pkg/iface@version`, `ns:pkg/*`
 * **Re-entrance.** A call into a child can call back into the donut's
   virtualized interfaces before it returns.
 * **Instantiation order.** Children are instantiated one after another, in an
-  unspecified order. A child's start function must not call code that calls
+  unspecified order decided by `rustc`. A child's start function must not call code that calls
   another child: that child may not be linked yet, and the call traps.
 * **Children don't call each other directly.** A child's imports are
   implemented by the donut or the host, never by another child.
@@ -233,21 +232,3 @@ Passthrough entries are `ns:pkg/iface`, `ns:pkg/iface@version`, `ns:pkg/*`
 
 The crates themselves build on stock releases: wit-bindgen 0.63 and wasm-tools
 0.262.
-
-## This repository
-
-| | |
-|---|---|
-| `crates/donut` | the `child!` macro |
-| `crates/donut-plan` | what it generates: the child's world, bindings, and manifest |
-| `examples/greeter` | the example above |
-| `spike/` | two donuts with two holes each, one written by hand and one with `child!`, checked against Wasmtime |
-| `examples/spike` | the spike's donut, with `child!` |
-| `docs/design.md` | the design |
-
-```sh
-cargo test               # donut-plan's snapshot and error tests
-examples/greeter/run.sh  # the example above, end to end, on Wasmtime ≥ 49
-spike/run.sh             # both spike donuts, plugged with wac, on Wasmtime ≥ 49
-examples/spike/check.sh  # the child! donut's core module matches the hand-written one
-```
