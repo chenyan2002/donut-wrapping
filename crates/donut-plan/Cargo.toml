@@ -1,0 +1,17 @@
+[package]
+name = "donut-plan"
+description = "Plans a `child!`: the bindings and manifest for one guest component plugged into a donut"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+heck = { workspace = true }
+wit-bindgen-core = { workspace = true }
+wit-bindgen-rust = { workspace = true }
+wit-component = { workspace = true }
+wit-parser = { workspace = true }
+
+[dev-dependencies]
+wit-component = { workspace = true }

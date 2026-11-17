@@ -1,0 +1,29 @@
+[workspace]
+members = ["crates/donut-plan", "crates/donut", "examples/spike"]
+# The examples are wasm-only: their export names (`…#f`) don't link natively.
+default-members = ["crates/donut-plan", "crates/donut"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+license = "Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT"
+
+[workspace.dependencies]
+anyhow = "1"
+heck = "0.5"
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }
+wit-bindgen = "0.63.0"
+wit-bindgen-core = "0.63.0"
+wit-bindgen-rust = "0.63.0"
+wit-component = "0.262.0"
+wit-parser = "0.262.0"
+donut-plan = { path = "crates/donut-plan" }
+donut = { path = "crates/donut" }
+
+[profile.release]
+opt-level = "s"
+debug = false
+strip = true

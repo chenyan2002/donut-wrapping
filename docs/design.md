@@ -107,7 +107,7 @@ passthrough the rest, and `export_passthrough: ["wasi:http/incoming-handler"]`.
 | `name` | Required. The child's name in snake_case, like the other options: it's the generated module as written (`my_app` → `mod my_app`). Its kebab-case form (`my-app`) is the hole's import name and part of every generated WIT and symbol name. Must match `[a-z][a-z0-9]*(_[a-z][a-z0-9]*)*`, so the conversion is lossless, and not be a Rust keyword. Unique in the component. |
 | `import_passthrough` | Guest imports given to the child straight from the donut's host. Everything else `G` imports is virtualized. |
 | `export_passthrough` | Guest exports the donut re-exports unchanged. |
-| `with`, `additional_derives`, `runtime_path`, … | Forwarded to wit-bindgen for this child's World A (§5). `with` is how a child shares host bindings with the user's `generate!`. |
+| `with`, `additional_derives`, `runtime_path`, … | Forwarded to wit-bindgen for this child's bindings (§5). `with` is how a child shares host bindings with the user's `generate!`. |
 
 **Patterns.** A passthrough entry is an interface name, with or without a version
 (`wasi:cli/stdout`, `wasi:cli/stdout@0.2.6`), all of a package (`wasi:cli/*`), or
@@ -141,25 +141,46 @@ unimplemented `Guest` trait), not a silent hole to the host.
 
 ## 5. Generated code
 
-`child!` must be invoked at the crate root, and expands to `pub mod <name> { … }`.
-A proc macro can't learn the module it was invoked in, so this is what lets it
-use absolute paths: World B's type-level `with` remaps (each virtual resource ↦
-World A's export-side type; P§4 step 3) point at
-`crate::<name>::exports::virtual_…::Request`. wit-bindgen pastes type-level remap
-paths verbatim at each use site, so they have to be absolute; no wit-bindgen
-change is needed.
+`child!` must be invoked at the crate root, and expands to `pub mod <name> { … }`:
+one wit-bindgen run over the child's world (below), plus `virt`, `guest`, and the
+manifest. A proc macro can't learn the module it was invoked in, so expanding
+to a module of its own is what lets it use absolute paths: the type-level `with`
+remaps below point at `crate::<name>::exports::virtual_<child>::…::Counter`.
+wit-bindgen pastes type-level remap paths verbatim at each use site, so they
+have to be absolute; no wit-bindgen change is needed.
 
-`virt` is the only path users write. It re-exports wit-bindgen's output for the
-renamed copies (below), one `pub use` per namespace
-(`pub use super::exports::virtual_app_wasi as wasi;`), so the WIT rename never
-shows up in user code.
+**The child's world** (`donut-child:<child>/child`) is `G` inverted, in one world:
+
+* it *exports* the `virtual-<child>:…` copies of the virtualized interfaces;
+* it *imports* the `guest-<child>:…` copies of `G`'s exports, plus types-only
+  `guest-<child>:…` copies of the virtualized interfaces those use (e.g. `types`,
+  for `handler.run(c: borrow<counter>)`);
+* elaboration adds the host interfaces either side uses, as imports.
+
+The guest side's types-only copies are what make one world possible. Their
+resources are import-side resources of their own, which type-level `with`
+remaps map to the virtual copies' Rust types. So the world's imports never
+mention its exports' types (P§2.1), and wit-bindgen renders the guest side the
+outbound way: it renders `borrow<R>` as an inbound `RBorrow<'a>` whenever `R` is
+exported in the world, whatever the call's direction (`interface.rs`
+`anonymous_type_handle`), and `RBorrow` can't be lowered. The other types of
+those copies are remapped too, so they're one Rust type on both sides, unless
+they contain a `borrow` of a virtual resource, which renders differently on
+each side (`Plan::guest_side_remaps`). The prototype generated two worlds instead
+(P§4), one for each side, with interface-level remaps between them for host
+bindings; here host interfaces are generated once.
+
+`virt` and `guest` are the only paths users write. They re-export wit-bindgen's
+output for the renamed copies, one `pub use` per package
+(`pub mod wasi { pub use super::super::exports::virtual_app::wasi_cli as cli; }`),
+so the WIT renames never show up in user code.
 
 | Item | Path (in `crate::<name>`) |
 |---|---|
 | Virtual interfaces, to implement | `virt::<ns>::<pkg>::<iface>` |
-| World A: host bindings the virtual interfaces need (passthrough dependencies) | `<ns>::<pkg>::<iface>`, unless remapped with `with` |
-| World A's export macro | `export!` |
-| World B: the child's exports, to call | `guest::<ns>::<pkg>::<iface>::<func>` |
+| The child's exports, to call | `guest::<ns>::<pkg>::<iface>::<func>` |
+| Host bindings the generated code needs (passthrough dependencies of either side) | `<ns>::<pkg>::<iface>`, unless remapped with `with` |
+| The export macro | `export!` |
 
 **Virtual interfaces are always copies.** The guest's view of a virtualized
 interface is a copy in a renamed package. The prototype needed copies for
@@ -184,7 +205,7 @@ The copy is internal: users only see `virt` (Rust) and the guest's original name
 (the hole's type). Dropping the rename from WIT altogether would need per-child
 prefixes in wit-bindgen for export symbols (`export_prefix` exists) *and* for
 `[export]<iface>` resource intrinsics (two children's `[resource-new]input-stream`
-would otherwise link to one import). It would also need each child's World A kept
+would otherwise link to one import). It would also need each child's world kept
 out of the merged world (no `component-type` section), and a wit-component
 refactor, since its encoder state is keyed by interface. That's the same rename,
 moved into the encoder.
@@ -194,19 +215,25 @@ wasm-ld links the children and wit-component merges their worlds. `<child>` is
 the kebab-case form of `name` (`my_app` → `my-app`), since WIT and component
 names can't contain `_`:
 
-* virtual copies live in package `virtual-<CHILD>-<ns>:<pkg>`, with the child
-  part in uppercase, so the export symbols are e.g.
-  `virtual-APP-wasi:cli/stdout#get-stdout`. Joining with `-` alone would lose the
-  boundary between child and namespace: child `a` with `b-c:pkg` and child `a-b`
-  with `c:pkg` would both be `virtual-a-b-c:pkg`. WIT allows all-uppercase words,
-  so the uppercase words are the child and the lowercase ones the namespace
-  (`virtual-A-b-c` vs `virtual-A-B-c`). To keep this unambiguous, `child!` rejects
-  a guest interface whose namespace has an uppercase word;
-* World A/B are synthesized in a per-child package (`donut-child:<child>`), so
-  each wit-bindgen run's `component-type:…` section has a distinct name (wasm-ld
-  concatenates same-named custom sections);
-* World B's core imports use the prefix `[child=<child>]` (the prototype's
-  `[guest-export]`), e.g. `"[child=app]example:app/handler" "handle"`;
+* virtual copies live in package `virtual-<child>:<ns>-<pkg>` (same version), so
+  the export symbols are e.g. `virtual-app:wasi-cli/stdout#get-stdout`. The child
+  is the whole namespace, so two children's copies never collide. Within one
+  child, `a:b-c` and `a-b:c` would both become `virtual-<child>:a-b-c`; `child!`
+  sees all of `G`, so it rejects that. (An earlier version of this design marked
+  the child part in uppercase, `virtual-APP-wasi:cli`. Component names don't allow
+  uppercase in package names, so wit-component rejects it.)
+* the child's world is synthesized in a per-child package (`donut-child:<child>`),
+  so its `component-type:…` section has a distinct name (wasm-ld concatenates
+  same-named custom sections);
+* the guest side's copies live in package `guest-<child>:<ns>-<pkg>`, so a call
+  into the child has a core import name of its own, e.g.
+  `"guest-app:example-app/handler" "handle"`. It can't be the interface's own
+  name: two children of the same world would emit identical imports, and so would
+  a donut that also imports that interface from its host. The prototype used a
+  wit-bindgen option instead (`import_module_prefix`, giving
+  `"[guest-export]example:app/handler"`), which also suppressed the guest side's
+  `component-type` section. With a WIT rename, stock wit-bindgen works, and the
+  encoder drops the `guest-<child>` imports from the merged world itself (§7);
 * the manifest section is `wit-bindgen-child:<child>` (§6).
 
 A duplicate `name` within one crate is a duplicate-module error from rustc.
@@ -216,11 +243,11 @@ Across crates, the encoder reports it.
 
 * Each `generate!`/`child!` emits its own `component-type` section. wit-component
   already merges them into one world, so the donut's world is the user's world ∪
-  every child's World A. Interfaces imported by several (e.g. `wasi:io/streams`)
+  every child's world (minus their `guest-<child>` imports, §7). Interfaces imported by several (e.g. `wasi:io/streams`)
   merge into one import.
 * Each child's `export!` lives in its own module (`app::export!(… with_types_in
   app)`), so it doesn't clash with the user's. The user calls all of them.
-* Host bindings generated twice (by the user's world and a child's World A) are
+* Host bindings generated twice (by the user's world and a child's) are
   distinct Rust types for the same host resource. To pass one to the other, map it:
   `with: { "wasi:io/streams": crate::host::wasi::io::streams }` in `child!`.
 * A re-exported guest interface and a donut export with the same name is an
@@ -230,11 +257,11 @@ Across crates, the encoder reports it.
 
 `forward`, `mock`, `hooks`, and everything behind them: `forward.rs`
 (`Fwd…`/`Mock…` wrappers, `Hooks`, `ToHost`/`FromHost` conversions, `lend`), and
-`merge_structurally_equal_types` for World A. Passthrough is now purely
+`merge_structurally_equal_types`. Passthrough is now purely
 component-level: the child gets the host's instance, or the host gets the child's,
 with no Rust code in between. To intercept, virtualize and write the delegating
-impl by hand. `Plan::world_b_shared_types` stays: it keeps resource-free types
-shared between `exports::…` and `guest::…`.
+impl by hand. Sharing types between `virt::…` and `guest::…` survives as
+`Plan::guest_side_remaps`.
 
 ## 6. Manifest v1
 
@@ -244,7 +271,8 @@ Custom section `wit-bindgen-child:<child>` (must not start with `component-type`
 u8 version = 1
 string child-name
 vec<u8> G                         // wit-component's metadata encoding
-vec<(string, string)> virtualized // guest import name → World A export implementing it
+vec<(string, string)> virtualized // guest import name → the export implementing it (virtual-<child>:…)
+vec<(string, string)> exports     // guest export name → the import calling it (guest-<child>:…)
 vec<string> export_passthrough    // guest export names
 ```
 
@@ -258,17 +286,25 @@ Turned on by one or more `wit-bindgen-child:*` sections. The guest binary is nev
 an input: `ComponentEncoder::donut_guest` and `component new --donut-guest` are
 removed. Changes from P§5.1:
 
+* **Metadata.** Drop each child's manifest section, merge the `component-type`
+  sections as usual, then drop every import in namespace `guest-<child>` from the
+  merged world: those are the child's exports and the types-only copies of what
+  they use, not host imports. Nothing else depends on them.
 * **The hole.** Per child, `(import "<child>" (component $G))`, where `$G` is `G`
   encoded as a component type (the same world → component-type encoding
   wit-component uses for WIT packages). The hole's type is exactly `G`, so a
   plugged guest must import a subset of `G`'s imports (§8).
-* **Import classification.** `[child=<name>]<iface>` modules are classified as
-  `GuestExportFunc`/`GuestResourceDrop` of that child. Virtual exports listed in
-  any manifest are internal.
-* **Passthrough imports** are kept even when the core module doesn't use them, as
-  before. They come from `G` now, not from a decoded guest binary.
+* **Import classification.** Core import modules named in a manifest's
+  `exports` (`guest-<child>:…`) are classified as `GuestExportFunc`/`GuestResourceDrop`
+  of that child's export. Their ABI comes from the dropped `guest-<child>` imports,
+  or from importizing `G`, as in the prototype; both give the same flattening.
+  Virtual exports listed in any manifest are internal.
+* **Passthrough imports** come from `G`, not from a decoded guest binary, and are
+  added even when the core module doesn't import them. The child's world imports
+  only the passthrough interfaces the generated Rust needs (the dependencies of
+  either side), so most of them (e.g. a guest's `wasi:cli/*`) are only in `G`.
 * **Instantiation, per child, in manifest order** (the order the sections appear
-  in the linked module), after phase-1 fixup (host lowerings, dtors, `_initialize`):
+  in the linked module; see §10 on making it controllable), after phase-1 fixup (host lowerings, dtors, `_initialize`):
   1. instantiate the hole with the child's virtual instances and passthrough imports;
   2. alias its exports, `canon lower` them, and `canon resource.drop` for its
      resources;
@@ -314,7 +350,10 @@ component from the root is unsupported, which this never does.
 **Version skew.** Component subtyping matches import names exactly (wasmparser
 `open_instance_type` looks args up by name). A guest built with a newer Rust
 `std` imports e.g. `wasi:cli/environment@0.2.9`, but a hole typed with `@0.2.6`
-doesn't provide that name, so the plug fails. First cut: `G` must use the WASI
+doesn't provide that name, so the plug fails. The spike confirms it: a guest
+importing `wasi:clocks/monotonic-clock@0.2.1` into a hole typed `@0.2.0` is
+rejected with ``type mismatch for import `a` / missing import named …@0.2.1``.
+First cut: `G` must use the WASI
 version the guest was built with, and wac's error says which name mismatched.
 Later: wac inserts a small renaming wrapper component for semver-compatible names
 (it already has `are_semver_compatible`). That's safe in practice because
@@ -326,8 +365,8 @@ Code moves from `prototype` to `main` in this order, trimmed as it moves.
 
 | Step | Where | Work |
 |---|---|---|
-| 1 | `spike/` | Rewrite `donut.wat.in` in hole form, with two children, plug it by hand, and run it on Wasmtime 49. This checks component-valued arguments and per-child fixups before any code. |
-| 2 | this repo | `donut-plan` (without `forward.rs`) and `child!`: options, patterns, checks (§4), `mod <name>` and per-child naming (§5), manifest v1. Snapshot tests, including two children. |
+| 1 | `spike/` | Done: a hand-written donut with two holes, plugged by hand, runs on Wasmtime 49 and 50 (`spike/README.md`). It confirms component-valued arguments, per-child fixups, both passthroughs, and the version-skew rejection. |
+| 2 | this repo | Done: `donut-plan` (without `forward.rs`) and `child!`, with options, patterns, checks (§4), `mod <name>` and per-child naming (§5), and manifest v1 (encoded in `donut-plan` for now; it moves to wit-component with the decoder in step 3). `examples/spike` is the spike's donut written with `child!`; `check.sh` checks that its core module has exactly the child-related names of `spike/donut.wat`'s `$main`. |
 | 3 | wit-component | Hole mode (§7). Remove embed mode and `--donut-guest`. |
 | 4 | wac | Component-valued plug (§8). |
 | 5 | this repo | End-to-end tests (`cargo build` → `component new` → `wac plug` → Wasmtime). Port `examples/virtualize`, port `examples/secrets` with hand-written impls, and add a two-child example. Drop `examples/forward` and `examples/fastly` (they're about generated forwarding and mocks). |
@@ -339,10 +378,18 @@ Code moves from `prototype` to `main` in this order, trimmed as it moves.
    too restrictive, a `module: "crate::a::b"` option could prefix the paths.
 2. **Mediated calls between children.** Rust code may call child B while handling
    a callback from child A. That isn't direct child-to-child wiring, so it's
-   allowed. Calling back into a child that is already on the stack is not; we
-   still need to confirm that Wasmtime traps there.
+   allowed. Calling child A again while A is on the stack is allowed too: the
+   spike shows no trap on Wasmtime 49 or 50, because sync p2 lifts have no
+   exclusivity check. Is that something to document, or should the generated
+   `guest::…` wrappers guard against it?
 3. **Hole type vs. guest's actual imports.** Should `child!` accept several worlds
    (`guest: ["example:app/app", "wasi:cli/imports@0.2.6"]`) so users don't have to
    edit the guest's WIT to add `include wasi:…`?
-4. **Crate and section naming.** The macro is `donut::child!`. Should the crates and
-   wit-component's API (`wit_component::donut`) be renamed too?
+4. ~~**Crate and section naming.**~~ Decided: the crates stay `donut` and
+   `donut-plan`.
+5. **Child instantiation order.** Children are instantiated in the order their
+   manifest sections appear in the linked module. With several `child!`s in one
+   crate, that's up to rustc and wasm-ld (the spike crate happens to get `a`
+   before `b`), so a child whose start function calls another child can't rely
+   on it. Options: sort by name; an `after: ["other"]` option; or document that
+   start functions mustn't call other children.
