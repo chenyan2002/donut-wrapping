@@ -1,0 +1,13 @@
+[package]
+name = "greeter-app"
+description = "An ordinary component that greets people, using a greeting from `config`"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { workspace = true }

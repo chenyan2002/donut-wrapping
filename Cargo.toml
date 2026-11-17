@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/donut-plan", "crates/donut", "examples/spike"]
+members = [
+  "crates/donut-plan",
+  "crates/donut",
+  "examples/spike",
+  "examples/greeter/app",
+  "examples/greeter/donut",
+]
 # The examples are wasm-only: their export names (`…#f`) don't link natively.
 default-members = ["crates/donut-plan", "crates/donut"]
 resolver = "2"

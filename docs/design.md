@@ -340,13 +340,18 @@ composition. What wac has and lacks today (0.12):
   be an instantiation argument. `plug` only aliases plug *exports* into socket
   imports.
 
-**Changes:**
-* `CompositionGraph`: a node that refers to a package's component definition, and
-  `set_instantiation_argument` accepting it.
-* `plug`: for each plug, first try the socket's component-typed imports. If
-  exactly one accepts the plug's type, pass the plug component. If none do, fall
-  back to today's export matching. If several do, it's an error that asks for
-  `--plug <hole>=<path>` (new syntax, also usable to be explicit).
+**Changes** (implemented on wac's `donut-hole` branch):
+* `CompositionGraph::component(package)` adds a *component node*: the package's
+  component as a value. `set_instantiation_argument` accepts it for a
+  component-typed import, after the usual subtype check (world subtyping). It's
+  encoded as the package's component index, shared with any instantiation of the
+  same package.
+* `plug_with(graph, plugs, socket)` takes `Plug { package, hole: Option<String> }`;
+  `plug` delegates to it. Plugs that name a hole fill it first. Each other plug
+  then fills the one remaining hole its type fits; if it fits none, today's export
+  matching applies; if it fits several, it's an error asking to name one.
+* `wac plug` accepts `--plug <hole>=<path>`. The prefix counts as a hole's name
+  only if it's a plain component name, so ordinary paths are unaffected.
 
 Wasmtime's inliner already accepts components as `instantiate` arguments
 (`ComponentItemDef::Component` in `translate/inline.rs`). Only exporting a
@@ -373,7 +378,7 @@ Code moves from `prototype` to `main` in this order, trimmed as it moves.
 | 1 | `spike/` | Done: a hand-written donut with two holes, plugged by hand, runs on Wasmtime 49 and 50 (`spike/README.md`). It confirms component-valued arguments, per-child fixups, both passthroughs, and the version-skew rejection. |
 | 2 | this repo | Done: `donut-plan` (without `forward.rs`) and `child!`, with options, patterns, checks (§4), `mod <name>` and per-child naming (§5), and manifest v1 (encoded by `donut-plan`, decoded by wit-component). `examples/spike` is the spike's donut written with `child!`; `check.sh` checks that its core module has exactly the child-related names of `spike/donut.wat`'s `$main`. |
 | 3 | wit-component | Done, on wasm-tools' `donut-hole` branch: hole mode (§7), with embed mode and `--donut-guest` removed. `spike/run.sh` encodes `examples/spike` with it, plugs the spike's guests, and passes the same checks as the hand-written donut. |
-| 4 | wac | Component-valued plug (§8). |
+| 4 | wac | Done, on wac's `donut-hole` branch: component-valued plugs (§8). `spike/run.sh` plugs both donuts with `wac plug`. |
 | 5 | this repo | End-to-end tests (`cargo build` → `component new` → `wac plug` → Wasmtime). Port `examples/virtualize`, port `examples/secrets` with hand-written impls, and add a two-child example. Drop `examples/forward` and `examples/fastly` (they're about generated forwarding and mocks). |
 | 6 | upstream | PRs for steps 3 and 4. wasm-component-ld picks up hole mode with no new flag. |
 

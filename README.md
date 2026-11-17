@@ -1,42 +1,253 @@
 # Donut wrapping for Rust components
 
-`donut::child!` lets a Rust component wrap other components (its *children*):
-it implements the interfaces a child imports, calls the child's exports, and
-leaves a typed hole that `wac plug` fills with the child component later.
-See [`docs/design.md`](docs/design.md).
+`donut::child!` lets a Rust component wrap other components, its *children*.
+For each child, your component:
 
-Status: being rebuilt from the [prototype branch](https://github.com/chenyan2002/donut-wrapping/tree/prototype)
+* implements the interfaces the child imports (it *virtualizes* them), or
+  passes them straight through from the host;
+* calls the child's exports from its own code;
+* leaves a typed *hole* where the child goes. `wac plug` fills it with a real
+  component later, so one built donut can wrap any component of the right type.
+
+This is the [donut wrapping](https://github.com/WebAssembly/component-model/blob/main/design/mvp/Explainer.md)
+pattern from the component model Explainer. The design is in
+[`docs/design.md`](docs/design.md); the original implementation is on the
+[prototype branch](https://github.com/chenyan2002/donut-wrapping/tree/prototype).
+
+## Example: one app, two configurations
+
+An app greets people, using a greeting it reads from a `config` interface. We
+want to run it twice in one component, once in English and once in French, and
+route requests to the right copy. The donut has two children, `english` and
+`french`, both of the app's world. Each child gets its own `config`, so the
+same app binary behaves differently in each hole.
+
+The code is in [`examples/greeter`](examples/greeter): `wit/`, `app/` (crate
+`greeter-app`), and `donut/` (crate `greeter-donut`). Its `run.sh` runs the
+steps below and checks the output.
+
+### WIT
+
+```wit
+package example:greeter;
+
+interface config {
+  get: func(key: string) -> option<string>;
+}
+
+interface handler {
+  handle: func(name: string) -> string;
+}
+
+/// What the app targets, and so each hole's type.
+world app {
+  include wasi:cli/imports@0.2.9;   // what Rust `std` imports on wasm32-wasip2
+  import config;
+  export handler;
+}
+
+/// The donut's own world.
+world host {
+  export handler;
+}
+```
+
+`wit/deps` holds the WASI 0.2.9 packages (`cli`, `clocks`, `filesystem`, `io`,
+`random`, `sockets`), e.g. copied from the `wasip2-1.0.2+wasi-0.2.9` crate's
+`wit/deps`.
+
+### The app
+
+An ordinary component that knows nothing about donuts:
 
 ```rust
-wit_bindgen::generate!({ path: "wit", world: "example:app/host" });  // the donut's own world
+wit_bindgen::generate!({ path: "../wit", world: "example:greeter/app", generate_all });
 
+use example::greeter::config;
+
+struct App;
+
+impl exports::example::greeter::handler::Guest for App {
+    fn handle(name: String) -> String {
+        let greeting = config::get("greeting").unwrap_or_else(|| "hello".to_string());
+        format!("{greeting}, {name}!")
+    }
+}
+
+export!(App);
+```
+
+### The donut
+
+```rust
+// The donut's own world.
+wit_bindgen::generate!({ path: "../wit", world: "example:greeter/host" });
+
+// Two children of the same world. Everything they import is virtualized,
+// except WASI, which goes straight to the host.
 donut::child!({
-    name: "app",
-    path: "wit",
-    guest: "example:app/app",          // the hole's type
-    import_passthrough: ["wasi:*"],    // everything else the guest imports is virtualized
-    export_passthrough: ["example:app/info"],
+    name: "english",
+    path: "../wit",
+    guest: "example:greeter/app",
+    import_passthrough: ["wasi:*"],
+});
+donut::child!({
+    name: "french",
+    path: "../wit",
+    guest: "example:greeter/app",
+    import_passthrough: ["wasi:*"],
 });
 
-// Implement `app::virt::…::Guest`, call `app::guest::…`, then:
-app::export!(MyDonut);
+struct Donut;
+
+// The donut's own export: route `<lang>/<name>` to a child.
+impl exports::example::greeter::handler::Guest for Donut {
+    fn handle(path: String) -> String {
+        match path.split_once('/') {
+            Some(("en", name)) => english::guest::example::greeter::handler::handle(name),
+            Some(("fr", name)) => french::guest::example::greeter::handler::handle(name),
+            _ => format!("unknown route `{path}`"),
+        }
+    }
+}
+
+// Each child's `config`: a different greeting.
+impl english::virt::example::greeter::config::Guest for Donut {
+    fn get(key: String) -> Option<String> {
+        (key == "greeting").then(|| "Hello".to_string())
+    }
+}
+impl french::virt::example::greeter::config::Guest for Donut {
+    fn get(key: String) -> Option<String> {
+        (key == "greeting").then(|| "Bonjour".to_string())
+    }
+}
+
+export!(Donut);
+english::export!(Donut);
+french::export!(Donut);
 ```
 
-A crate using `child!` builds to a core module, which wit-component's hole
-mode turns into a component with one hole per child. Hole mode is on the
-`donut-hole` branch of wasm-tools for now:
+Each `child!` expands to a module named after the child:
+
+| Path | What |
+|---|---|
+| `english::virt::<ns>::<pkg>::<iface>` | the interfaces the child imports and the donut implements: implement their `Guest` traits |
+| `english::guest::<ns>::<pkg>::<iface>` | functions that call the child's exports |
+| `english::export!` | registers your implementation, like `generate!`'s `export!` |
+
+The donut crate depends on `donut` and `wit-bindgen`, and is a `cdylib`.
+
+### Building and running
 
 ```sh
-RUSTFLAGS=-Clink-arg=--skip-wit-component cargo build --release --target wasm32-wasip2
-wasm-tools component new target/wasm32-wasip2/release/my_donut.wasm -o donut.wasm
+# 1. The donut, to a core module.
+RUSTFLAGS="-Clink-arg=--skip-wit-component" \
+  cargo build --release --target wasm32-wasip2 -p greeter-donut
+
+# 2. The core module, to a component with two holes.
+wasm-tools component new target/wasm32-wasip2/release/greeter_donut.wasm -o donut.wasm
+
+# 3. The app: an ordinary component.
+cargo build --release --target wasm32-wasip2 -p greeter-app
+
+# 4. Plug the app into both holes.
+wac plug donut.wasm \
+  --plug english=target/wasm32-wasip2/release/greeter_app.wasm \
+  --plug french=target/wasm32-wasip2/release/greeter_app.wasm \
+  -o composed.wasm
+
+# 5. Run.
+wasmtime run --invoke 'handle("en/Ada")' composed.wasm   # "Hello, Ada!"
+wasmtime run --invoke 'handle("fr/Ada")' composed.wasm   # "Bonjour, Ada!"
 ```
 
-Until `wac plug` fills component-typed holes, `spike/plug.sh` stands in for it.
+What each step does:
+
+1. **`cargo build`** compiles the donut. `child!` generated, per child, the
+   bindings above, and a `wit-bindgen-child:<name>` custom section (the child's
+   *manifest*): the child's world, and which interfaces are virtualized,
+   passed through, and called. `--skip-wit-component` makes the linker stop at
+   the core module: the stock componentizer doesn't know about holes yet.
+2. **`wasm-tools component new`** turns the core module into a component, in
+   *hole mode*, because the module has manifests. For each child, the
+   component:
+   * imports a component of the child's world: `(import "english" (component …))`;
+   * instantiates it, with the donut's `config` implementation and the host's
+     WASI interfaces;
+   * links the child's exports to the calls in `english::guest::…`, before the
+     next child is instantiated.
+
+   The result's own imports are the host's WASI interfaces (the donut's and the
+   ones passed through), plus the two holes. Its export is the donut's
+   `handler`.
+3. **The app** is built the usual way. It doesn't know it'll be wrapped.
+4. **`wac plug`** builds a component that embeds the donut and the app, and
+   instantiates the donut with the app as both holes. A plug fills the one hole
+   its type fits; here both holes have the same type, so each plug names its
+   hole (`english=…`). The holes are gone from the result, which only imports
+   WASI.
+5. **Wasmtime** (≥ 49) runs it like any component.
+
+The same `donut.wasm` can be plugged with any components of the app's world,
+without rebuilding the donut.
+
+## Options
+
+| `child!` option | |
+|---|---|
+| `name` | required: the module, in snake case; its kebab-case form is the hole's name |
+| `guest` | required: the child's world, which is the hole's exact type |
+| `path` | WIT path(s), relative to the crate's manifest directory; default `"wit"` |
+| `import_passthrough` | imports of the child passed straight through from the host; every other import is virtualized |
+| `export_passthrough` | exports of the child the donut re-exports unchanged (no Rust code involved) |
+| `with`, `additional_derives`, `runtime_path` | as in `wit_bindgen::generate!`, for the child's bindings |
+
+Passthrough entries are `ns:pkg/iface`, `ns:pkg/iface@version`, `ns:pkg/*`
+(optionally with `@version`), or `ns:*`.
+
+## Things to know
+
+* **A hole's type is exactly the child's world.** A component plugged into it
+  must import a subset of that world's imports, by exact name. So the world has
+  to include the WASI interfaces the guests import, at the guests' version:
+  `wasi:cli/imports@0.2.9` for Rust `std` today. A guest built against another
+  WASI version doesn't fit the hole. The composed component imports everything
+  in the world (here all of `wasi:cli/imports`, sockets and filesystem
+  included), even what the plugged app doesn't use.
+* **Re-entrance.** A call into a child can call back into the donut's
+  virtualized interfaces before it returns.
+* **Instantiation order.** Children are instantiated one after another, in an
+  unspecified order. A child's start function must not call code that calls
+  another child: that child may not be linked yet, and the call traps.
+* **Children don't call each other directly.** A child's imports are
+  implemented by the donut or the host, never by another child.
+* Component model p2 only: no `async`, `stream`, or `future` in a child's world.
+
+## Requirements
+
+* Rust with the `wasm32-wasip2` target: `rustup target add wasm32-wasip2`.
+* `wasm-tools` and `wac` built from their `donut-hole` branches, which add hole
+  mode and component-typed plugs. Neither is upstream yet.
+* Wasmtime ≥ 49 to run the result.
+
+The crates themselves build on stock releases: wit-bindgen 0.63 and wasm-tools
+0.262.
+
+## This repository
+
+| | |
+|---|---|
+| `crates/donut` | the `child!` macro |
+| `crates/donut-plan` | what it generates: the child's world, bindings, and manifest |
+| `examples/greeter` | the example above |
+| `spike/` | two donuts with two holes each, one written by hand and one with `child!`, checked against Wasmtime |
+| `examples/spike` | the spike's donut, with `child!` |
+| `docs/design.md` | the design |
 
 ```sh
 cargo test               # donut-plan's snapshot and error tests
-spike/run.sh             # both spike donuts (hand-written, and child! + hole mode), on Wasmtime ≥ 49
+examples/greeter/run.sh  # the example above, end to end, on Wasmtime ≥ 49
+spike/run.sh             # both spike donuts, plugged with wac, on Wasmtime ≥ 49
 examples/spike/check.sh  # the child! donut's core module matches the hand-written one
 ```
-
-Everything builds on stock crates: wit-bindgen 0.63 and wasm-tools 0.262.

@@ -1,0 +1,21 @@
+package example:greeter;
+
+interface config {
+  get: func(key: string) -> option<string>;
+}
+
+interface handler {
+  handle: func(name: string) -> string;
+}
+
+/// What the app targets, and so each hole's type.
+world app {
+  include wasi:cli/imports@0.2.9;   // what Rust `std` imports on wasm32-wasip2
+  import config;
+  export handler;
+}
+
+/// The donut's own world.
+world host {
+  export handler;
+}

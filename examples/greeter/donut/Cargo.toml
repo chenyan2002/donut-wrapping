@@ -1,0 +1,14 @@
+[package]
+name = "greeter-donut"
+description = "Runs the greeter app twice, as two children with different configs"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+donut = { workspace = true }
+wit-bindgen = { workspace = true }
