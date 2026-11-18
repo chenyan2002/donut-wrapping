@@ -3,7 +3,7 @@ package example:greeter;
 interface config {
   /// Settings for one request, made by the caller.
   resource settings {
-    get: func(key: string) -> option<string>;
+    get: func() -> string;
   }
 }
 

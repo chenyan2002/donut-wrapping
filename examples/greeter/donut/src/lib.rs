@@ -24,11 +24,11 @@ impl exports::example::greeter::handler::Guest for Donut {
     fn handle(path: String) -> String {
         match path.split_once('/') {
             Some(("en", name)) => {
-                let settings = english::virt::example::greeter::config::Settings::new(Settings("Hello"));
+                let settings = english::virt::example::greeter::config::Settings::new(Settings);
                 english::guest::example::greeter::greeting::greet(&settings, name)
             }
             Some(("fr", name)) => {
-                let settings = french::virt::example::greeter::config::Settings::new(Settings("Bonjour"));
+                let settings = french::virt::example::greeter::config::Settings::new(Settings);
                 french::guest::example::greeter::greeting::greet(&settings, name)
             }
             _ => format!("unknown route `{path}`"),
@@ -37,29 +37,23 @@ impl exports::example::greeter::handler::Guest for Donut {
 }
 
 /// A child's `settings`: one Rust type behind both children's resources.
-struct Settings(&'static str);
+struct Settings;
 
-impl Settings {
-    fn get(&self, key: &str) -> Option<String> {
-        (key == "greeting").then(|| self.0.to_string())
-    }
-}
-
-// Each child's `config`.
+// Each child's `config`, with its own greeting.
 impl english::virt::example::greeter::config::Guest for Donut {
     type Settings = Settings;
 }
 impl english::virt::example::greeter::config::GuestSettings for Settings {
-    fn get(&self, key: String) -> Option<String> {
-        Settings::get(self, &key)
+    fn get(&self) -> String {
+        "Hello".to_string()
     }
 }
 impl french::virt::example::greeter::config::Guest for Donut {
     type Settings = Settings;
 }
 impl french::virt::example::greeter::config::GuestSettings for Settings {
-    fn get(&self, key: String) -> Option<String> {
-        Settings::get(self, &key)
+    fn get(&self) -> String {
+        "Bonjour".to_string()
     }
 }
 

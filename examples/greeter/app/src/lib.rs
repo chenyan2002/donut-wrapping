@@ -6,8 +6,7 @@ struct App;
 
 impl exports::example::greeter::greeting::Guest for App {
     fn greet(settings: &Settings, name: String) -> String {
-        let greeting = settings.get("greeting").unwrap_or_else(|| "hello".to_string());
-        format!("{greeting}, {name}!")
+        format!("{}, {name}!", settings.get())
     }
 }
 
